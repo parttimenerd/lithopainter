@@ -5,7 +5,6 @@ import { useCircleCrop } from './hooks/useCircleCrop';
 import { useLithopane } from './hooks/useLithopane';
 import { useUndoRedo } from './hooks/useUndoRedo';
 import { exportSTL } from './three/stlExport';
-import { useDownloadHistory, heightmapToThumbnail } from './components/DownloadHistory';
 import { DEFAULT_CONFIG, type LithopaneConfig, type SourceMode } from './types';
 
 const STORAGE_KEY = 'lithopane-config';
@@ -73,7 +72,6 @@ export default function App() {
     }
   }, [config]);
 
-  const { history: downloadHistory, addEntry: addDownloadEntry, clearHistory: clearDownloadHistory } = useDownloadHistory();
   const crop = useCircleCrop();
   const { geometry, processing, maxThickness, generate, generateLive, regenerate, regenerateWithBg, regenerateWithoutBg, hasCachedSource, hasOriginalSource, heightmapData, computedThresholds, recrop, reset } = useLithopane(config, crop.extractCircle);
 
@@ -160,26 +158,10 @@ export default function App() {
     [generate]
   );
 
-  // Export with download history tracking
   const handleExport = useCallback(() => {
     if (!lithoGeo) return;
     exportSTL(lithoGeo);
-    // Record in download history
-    if (heightmapData) {
-      const thumbnail = heightmapToThumbnail(heightmapData.heightmap, heightmapData.resolution);
-      addDownloadEntry({
-        thumbnail,
-        filename: 'lithopane.stl',
-        config: {
-          diameterMm: config.diameterMm,
-          numLayers: config.numLayers,
-          layerHeightMm: config.layerHeightMm,
-          backgroundRemoval: config.backgroundRemoval,
-          nozzleWidthMm: config.nozzleWidthMm,
-        },
-      });
-    }
-  }, [lithoGeo, heightmapData, config, addDownloadEntry]);
+  }, [lithoGeo]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -327,8 +309,6 @@ export default function App() {
         showHeightmap={config.showHeightmap}
         heightmapData={heightmapData}
         onExport={handleExport}
-        downloadHistory={downloadHistory}
-        onClearHistory={clearDownloadHistory}
       />
     </div>
   );

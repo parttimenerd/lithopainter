@@ -103,10 +103,3 @@ export interface ProcessingState {
   error?: string;
 }
 
-export interface DownloadHistoryEntry {
-  id: string;
-  timestamp: number;
-  thumbnail: string; // data URL of heightmap thumbnail
-  filename: string;
-  config: Partial<LithopaneConfig>;
-}

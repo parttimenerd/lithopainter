@@ -2,10 +2,9 @@ import { useState, useEffect } from 'react';
 import * as THREE from 'three';
 import LithopaneScene from '../three/LithopaneScene';
 import { exportSTL } from '../three/stlExport';
-import type { ProcessingState, DownloadHistoryEntry } from '../types';
+import type { ProcessingState } from '../types';
 import type { LithopaneGeometry } from '../three/LithopaneMesh';
 import HeightmapPreview from './HeightmapPreview';
-import DownloadHistory from './DownloadHistory';
 
 interface Props {
   lithoGeo: LithopaneGeometry | null;
@@ -18,8 +17,6 @@ interface Props {
   showHeightmap: boolean;
   heightmapData: { heightmap: Float32Array; resolution: number } | null;
   onExport: () => void;
-  downloadHistory: DownloadHistoryEntry[];
-  onClearHistory: () => void;
 }
 
 export default function PreviewPanel({
@@ -33,8 +30,6 @@ export default function PreviewPanel({
   showHeightmap,
   heightmapData,
   onExport,
-  downloadHistory,
-  onClearHistory,
 }: Props) {
   const handleExport = () => {
     onExport();
@@ -137,8 +132,6 @@ export default function PreviewPanel({
           <div><kbd>Scroll</kbd> Resize crop circle</div>
         </div>
       )}
-
-      <DownloadHistory history={downloadHistory} onClear={onClearHistory} />
     </div>
   );
 }
