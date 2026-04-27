@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { processImage } from '../processing/imageProcessor';
 import { removeBackgroundOptimized } from '../processing/backgroundRemoval';
+import { createTextMask, applyTextMask } from '../processing/engravingStamp';
 import { generateLithopaneMesh, type LithopaneGeometry } from '../three/LithopaneMesh';
 import type { LithopaneConfig, ProcessingState } from '../types';
 import { roundToPrecision } from '../utils/mathUtils';
@@ -37,7 +38,7 @@ export function useLithopane(
 
   /** Run processImage with all current config params. */
   const runProcessing = useCallback(
-    (source: HTMLCanvasElement | HTMLImageElement) => {
+    (source: HTMLCanvasElement | HTMLImageElement, textMask?: Uint8Array | null) => {
       const effectiveBase = config.baseLayerHeightMm > 0 ? config.baseLayerHeightMm : config.layerHeightMm;
       return processImage(
         source,
@@ -62,7 +63,8 @@ export function useLithopane(
         config.adaptiveSegmentation,
         config.autoThresholds,
         config.reserveLayerForBg,
-        config.arachneOptimize
+        config.arachneOptimize,
+        textMask
       );
     },
     [config]
@@ -94,6 +96,33 @@ export function useLithopane(
   runProcessingRef.current = runProcessing;
   const buildMeshRef = useRef(buildMesh);
   buildMeshRef.current = buildMesh;
+
+  /** Run processing with engraving: create text mask first so dithering
+   *  skips text pixels, then stamp letter heights after quantisation. */
+  const runWithEngraving = useCallback(
+    (source: HTMLCanvasElement | HTMLImageElement) => {
+      const cfg = configRef.current;
+      // Phase 1: build text mask (if engraving enabled) BEFORE dithering
+      let textMask: Uint8Array | null = null;
+      if (cfg.engravingEnabled && cfg.engravingText) {
+        // We need the resolution that processImage will produce.
+        // Compute it the same way downsampleToCanvas does: min(ceil(diameter / nozzle), 500).
+        const res = Math.min(Math.ceil(cfg.diameterMm / cfg.nozzleWidthMm), 500);
+        textMask = createTextMask(res, cfg.diameterMm, cfg.engravingText, cfg.engravingFontSize, cfg.engravingAngle);
+      }
+      // Phase 2: process image — dithering skips text pixels
+      const result = runProcessingRef.current(source, textMask);
+      // Phase 3: stamp letter heights on the already-dithered heightmap
+      if (textMask) {
+        const effectiveBase = cfg.baseLayerHeightMm > 0 ? cfg.baseLayerHeightMm : cfg.layerHeightMm;
+        applyTextMask(result.heightmap, textMask, cfg.numLayers, cfg.layerHeightMm, effectiveBase);
+      }
+      return result;
+    },
+    []
+  );
+  const runWithEngravingRef = useRef(runWithEngraving);
+  runWithEngravingRef.current = runWithEngraving;
 
   /**
    * Process a source into a lithopane mesh.
@@ -145,8 +174,10 @@ export function useLithopane(
           const ec = extractCircleRef.current;
           processedSource = ec ? ec(bgRemoved) : bgRemoved;
         } else {
-          // Not using BG removal — clear stale BG cache from previous runs
+          // Not using BG removal — still apply circle crop from the full source
           bgRemovedFullRef.current = null;
+          const ec = extractCircleRef.current;
+          if (ec) processedSource = ec(sourceCanvas);
         }
 
         // Cache a snapshot of the source so image params can be adjusted without
@@ -163,7 +194,7 @@ export function useLithopane(
         if (genId !== processingRef.current) return;
         setProcessing({ status: 'processing', progress: 0.5 });
 
-        const { heightmap, resolution, computedThresholds: ct } = runProcessingRef.current(processedSource);
+        const { heightmap, resolution, computedThresholds: ct } = runWithEngravingRef.current(processedSource);
         setHeightmapData({ heightmap, resolution });
         setComputedThresholds(ct);
 
@@ -228,7 +259,7 @@ export function useLithopane(
         // Check if a newer request has arrived
         if (genId !== processingRef.current) { finishAndRetry(); return; }
         try {
-          const { heightmap, resolution, computedThresholds: ct } = runProcessingRef.current(cached);
+          const { heightmap, resolution, computedThresholds: ct } = runWithEngravingRef.current(cached);
           setHeightmapData({ heightmap, resolution });
           setComputedThresholds(ct);
 
@@ -285,7 +316,7 @@ export function useLithopane(
   const generateLive = useCallback(
     (sourceCanvas: HTMLCanvasElement) => {
       try {
-        const { heightmap, resolution, computedThresholds: ct } = runProcessingRef.current(sourceCanvas);
+        const { heightmap, resolution, computedThresholds: ct } = runWithEngravingRef.current(sourceCanvas);
         setHeightmapData({ heightmap, resolution });
         setComputedThresholds(ct);
         const geo = buildMeshRef.current(heightmap, resolution);

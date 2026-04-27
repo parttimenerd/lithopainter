@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { LithopaneConfig } from '../types';
 import { DEFAULT_CONFIG } from '../types';
 import ThresholdEditor from './ThresholdEditor';
+import EngravingEditor from './EngravingEditor';
 
 interface Props {
   config: LithopaneConfig;
@@ -78,6 +79,13 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
 
   const resetNotches = () => onChange({ ...config,
     numNotches: D.numNotches, notchRadiusMm: D.notchRadiusMm, notchHeightMm: D.notchHeightMm,
+  });
+
+  const resetExpert = () => onChange({ ...config,
+    showHeightmap: D.showHeightmap,
+    engravingEnabled: D.engravingEnabled,
+    engravingText: D.engravingText, engravingFontSize: D.engravingFontSize,
+    engravingAngle: D.engravingAngle, engravingLayers: D.engravingLayers,
   });
 
   return (
@@ -235,6 +243,23 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
             <input type="number" min={0.5} max={10} step={0.5} value={config.notchHeightMm} onChange={(e) => setNum('notchHeightMm', e.target.value, 0.5)} />
           </div>
         </div>
+      </Section>
+
+      <Section title="Expert Options" defaultOpen={false} onReset={resetExpert}>
+        <div className="control-section__toggles">
+          <label className="toggle"><input type="checkbox" checked={config.showHeightmap} onChange={(e) => set('showHeightmap', e.target.checked)} /> Show Heightmap</label>
+          <label className="toggle"><input type="checkbox" checked={config.engravingEnabled} onChange={(e) => set('engravingEnabled', e.target.checked)} /> Rim Engraving</label>
+        </div>
+        {config.engravingEnabled && (
+          <EngravingEditor
+            text={config.engravingText}
+            fontSize={config.engravingFontSize}
+            angle={config.engravingAngle}
+            layers={config.engravingLayers}
+            diameterMm={config.diameterMm}
+            onChange={(updates) => onChange({ ...config, ...updates })}
+          />
+        )}
       </Section>
 
 

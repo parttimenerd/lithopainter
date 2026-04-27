@@ -109,13 +109,13 @@ export default function WebcamView({
     frozenCanvasRef.current = clone;
     setFrozenDataUrl(clone.toDataURL());
     setFrozen(true);
-    // Use BG removal if explicitly requested OR if the backgroundRemoval config is on
-    if (withBgRemoval || backgroundRemoval) {
-      // Pass FULL frame — bg removal needs the whole image
+    if (withBgRemoval) {
+      // Pass FULL frame — bg removal needs the whole image, generate circle-crops after
       onCaptureWithBg(clone);
     } else {
-      const cropped = crop.extractCircle(clone);
-      onCapture(cropped);
+      // Pass FULL frame — generate will circle-crop it, keeping the
+      // uncropped original cached so recrop works when crop changes.
+      onCapture(clone);
     }
   };
 
@@ -214,11 +214,17 @@ export default function WebcamView({
 
   // When crop changes while frozen, re-extract from the cached source
   // via the recrop method which preserves BG removal state.
+  // Skip the initial trigger when frozen flips to true — handleCapture
+  // already processed the frame so recrop would double-crop.
   const onCropChangeRef = useRef(onCropChange);
   onCropChangeRef.current = onCropChange;
   const cropDebounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const prevFrozenRef = useRef(frozen);
   useEffect(() => {
-    if (frozen && frozenCanvasRef.current) {
+    const wasFrozen = prevFrozenRef.current;
+    prevFrozenRef.current = frozen;
+    // Only recrop when the crop itself changed while already frozen
+    if (frozen && wasFrozen && frozenCanvasRef.current) {
       clearTimeout(cropDebounceRef.current);
       cropDebounceRef.current = setTimeout(() => onCropChangeRef.current(), 300);
     }

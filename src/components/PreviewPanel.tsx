@@ -2,8 +2,10 @@ import { useState, useEffect } from 'react';
 import * as THREE from 'three';
 import LithopaneScene from '../three/LithopaneScene';
 import { exportSTL } from '../three/stlExport';
-import type { ProcessingState } from '../types';
+import type { ProcessingState, DownloadHistoryEntry } from '../types';
 import type { LithopaneGeometry } from '../three/LithopaneMesh';
+import HeightmapPreview from './HeightmapPreview';
+import DownloadHistory from './DownloadHistory';
 
 interface Props {
   lithoGeo: LithopaneGeometry | null;
@@ -13,6 +15,11 @@ interface Props {
   lightIntensity: number;
   absorptionCoefficient: number;
   processingState: ProcessingState;
+  showHeightmap: boolean;
+  heightmapData: { heightmap: Float32Array; resolution: number } | null;
+  onExport: () => void;
+  downloadHistory: DownloadHistoryEntry[];
+  onClearHistory: () => void;
 }
 
 export default function PreviewPanel({
@@ -23,9 +30,14 @@ export default function PreviewPanel({
   lightIntensity,
   absorptionCoefficient,
   processingState,
+  showHeightmap,
+  heightmapData,
+  onExport,
+  downloadHistory,
+  onClearHistory,
 }: Props) {
   const handleExport = () => {
-    if (lithoGeo) exportSTL(lithoGeo);
+    onExport();
   };
 
   const [errorDismissed, setErrorDismissed] = useState(false);
@@ -39,7 +51,11 @@ export default function PreviewPanel({
 
   return (
     <div className="preview-panel">
-      <LithopaneScene lithoGeo={lithoGeo} maxThickness={maxThickness} baseLayerHeightMm={baseLayerHeightMm} layerHeightMm={layerHeightMm} lightIntensity={lightIntensity} absorptionCoefficient={absorptionCoefficient} showNotches={showNotches} />
+      {showHeightmap && heightmapData ? (
+        <HeightmapPreview heightmap={heightmapData.heightmap} resolution={heightmapData.resolution} heatmap={true} />
+      ) : (
+        <LithopaneScene lithoGeo={lithoGeo} maxThickness={maxThickness} baseLayerHeightMm={baseLayerHeightMm} layerHeightMm={layerHeightMm} lightIntensity={lightIntensity} absorptionCoefficient={absorptionCoefficient} showNotches={showNotches} />
+      )}
 
       {processingState.status !== 'idle' && processingState.status !== 'done' &&
         !(processingState.status === 'error' && errorDismissed) && (
@@ -109,14 +125,20 @@ export default function PreviewPanel({
       {showShortcuts && (
         <div className="shortcuts-legend">
           <div><kbd>⌘/Ctrl+E</kbd> Export STL</div>
+          <div><kbd>⌘/Ctrl+Z</kbd> Undo</div>
+          <div><kbd>⌘/Ctrl+Shift+Z</kbd> Redo</div>
           <div><kbd>R</kbd> Reset adjustments</div>
           <div><kbd>M</kbd> Toggle mirror</div>
           <div><kbd>B</kbd> Toggle BG removal</div>
           <div><kbd>1</kbd> / <kbd>2</kbd> Webcam / Upload</div>
           <div><kbd>Space</kbd> Freeze / unfreeze</div>
+          <div><kbd>F</kbd> Detect face</div>
+          <div><kbd>T</kbd> / <kbd>Shift+T</kbd> Track face</div>
           <div><kbd>Scroll</kbd> Resize crop circle</div>
         </div>
       )}
+
+      <DownloadHistory history={downloadHistory} onClear={onClearHistory} />
     </div>
   );
 }

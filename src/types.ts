@@ -32,6 +32,12 @@ export interface LithopaneConfig {
   lightIntensity: number;       // 0.5 to 5.0, default 1.0 — controls brightness of backlight simulation
   absorptionCoefficient: number; // 1 to 20 mm⁻¹, default 8.0 — Lambert-Beer μ for white PLA
   arachneOptimize: boolean;       // optimize mesh for Arachne wall generator (morphological closing, chamfered Z-steps, 0.1mm grid)
+  showHeightmap: boolean;          // show 2D heightmap/heatmap preview instead of 3D
+  engravingEnabled: boolean;       // enable text engraving around the rim
+  engravingText: string;           // text to engrave around the rim
+  engravingFontSize: number;       // font size in mm for rim engraving
+  engravingAngle: number;          // starting angle in degrees for text placement
+  engravingLayers: number;         // number of extra layers for the engraving band (1-3)
 }
 
 export const DEFAULT_CONFIG: LithopaneConfig = {
@@ -66,6 +72,12 @@ export const DEFAULT_CONFIG: LithopaneConfig = {
   lightIntensity: 1.0,
   absorptionCoefficient: 8.0,
   arachneOptimize: false,
+  showHeightmap: false,
+  engravingEnabled: false,
+  engravingText: '',
+  engravingFontSize: 3,
+  engravingAngle: 0,
+  engravingLayers: 1,
 };
 
 export interface CropCircle {
@@ -89,4 +101,12 @@ export interface ProcessingState {
   status: 'idle' | 'processing' | 'removing-bg' | 'generating-mesh' | 'done' | 'error';
   progress: number; // 0–1
   error?: string;
+}
+
+export interface DownloadHistoryEntry {
+  id: string;
+  timestamp: number;
+  thumbnail: string; // data URL of heightmap thumbnail
+  filename: string;
+  config: Partial<LithopaneConfig>;
 }

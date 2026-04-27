@@ -3,7 +3,9 @@ import SourcePanel from './components/SourcePanel';
 import PreviewPanel from './components/PreviewPanel';
 import { useCircleCrop } from './hooks/useCircleCrop';
 import { useLithopane } from './hooks/useLithopane';
+import { useUndoRedo } from './hooks/useUndoRedo';
 import { exportSTL } from './three/stlExport';
+import { useDownloadHistory, heightmapToThumbnail } from './components/DownloadHistory';
 import { DEFAULT_CONFIG, type LithopaneConfig, type SourceMode } from './types';
 
 const STORAGE_KEY = 'lithopane-config';
@@ -53,13 +55,25 @@ function saveConfig(config: LithopaneConfig) {
 
 export default function App() {
   const [mode, setMode] = useState<SourceMode>('webcam');
-  const [config, setConfig] = useState<LithopaneConfig>(loadConfig);
+  const undoRedo = useUndoRedo<LithopaneConfig>(loadConfig());
+  const config = undoRedo.state;
   const [frozen, setFrozen] = useState(false);
 
   const handleSetConfig = useCallback((c: LithopaneConfig) => {
-    setConfig(c);
+    undoRedo.set(c);
     saveConfig(c);
-  }, []);
+  }, [undoRedo.set]);
+
+  // Save config whenever it changes (covers undo/redo too)
+  const prevSavedRef = useRef(config);
+  useEffect(() => {
+    if (prevSavedRef.current !== config) {
+      prevSavedRef.current = config;
+      saveConfig(config);
+    }
+  }, [config]);
+
+  const { history: downloadHistory, addEntry: addDownloadEntry, clearHistory: clearDownloadHistory } = useDownloadHistory();
   const crop = useCircleCrop();
   const { geometry, processing, maxThickness, generate, generateLive, regenerate, regenerateWithBg, regenerateWithoutBg, hasCachedSource, hasOriginalSource, heightmapData, computedThresholds, recrop, reset } = useLithopane(config, crop.extractCircle);
 
@@ -98,7 +112,12 @@ export default function App() {
       prev.adaptiveSegmentation !== config.adaptiveSegmentation ||
       prev.autoThresholds !== config.autoThresholds ||
       prev.reserveLayerForBg !== config.reserveLayerForBg ||
-      prev.arachneOptimize !== config.arachneOptimize);
+      prev.arachneOptimize !== config.arachneOptimize ||
+      prev.engravingEnabled !== config.engravingEnabled ||
+      prev.engravingText !== config.engravingText ||
+      prev.engravingFontSize !== config.engravingFontSize ||
+      prev.engravingAngle !== config.engravingAngle ||
+      prev.engravingLayers !== config.engravingLayers);
     // BG removal toggled on, or model changed while BG removal is enabled
     const needsBgRerun = hasOriginalSource && (
       (prev.bgModel !== config.bgModel && config.backgroundRemoval) ||
@@ -141,6 +160,27 @@ export default function App() {
     [generate]
   );
 
+  // Export with download history tracking
+  const handleExport = useCallback(() => {
+    if (!lithoGeo) return;
+    exportSTL(lithoGeo);
+    // Record in download history
+    if (heightmapData) {
+      const thumbnail = heightmapToThumbnail(heightmapData.heightmap, heightmapData.resolution);
+      addDownloadEntry({
+        thumbnail,
+        filename: 'lithopane.stl',
+        config: {
+          diameterMm: config.diameterMm,
+          numLayers: config.numLayers,
+          layerHeightMm: config.layerHeightMm,
+          backgroundRemoval: config.backgroundRemoval,
+          nozzleWidthMm: config.nozzleWidthMm,
+        },
+      });
+    }
+  }, [lithoGeo, heightmapData, config, addDownloadEntry]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -179,10 +219,18 @@ export default function App() {
       // Don't handle non-Alt shortcuts when a range is focused (let arrows work)
       if (isRange) return;
 
-      if (mod && key === 'e') {
+      if (mod && key === 'z' && !e.shiftKey) {
+        // Cmd/Ctrl+Z → Undo
+        e.preventDefault();
+        undoRedo.undo();
+      } else if (mod && key === 'z' && e.shiftKey) {
+        // Cmd/Ctrl+Shift+Z → Redo
+        e.preventDefault();
+        undoRedo.redo();
+      } else if (mod && key === 'e') {
         // Cmd/Ctrl+E → Export STL
         e.preventDefault();
-        if (lithoGeo) exportSTL(lithoGeo);
+        handleExport();
       } else if (key === 'r' && !mod) {
         // R → Reset image adjustments to defaults
         e.preventDefault();
@@ -221,7 +269,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [config, lithoGeo, handleSetConfig]);
+  }, [config, lithoGeo, handleSetConfig, handleExport, undoRedo.undo, undoRedo.redo]);
 
   // Resizable left column
   const [leftWidth, setLeftWidth] = useState(50); // percentage
@@ -276,6 +324,11 @@ export default function App() {
         lightIntensity={config.lightIntensity}
         absorptionCoefficient={config.absorptionCoefficient}
         processingState={processing}
+        showHeightmap={config.showHeightmap}
+        heightmapData={heightmapData}
+        onExport={handleExport}
+        downloadHistory={downloadHistory}
+        onClearHistory={clearDownloadHistory}
       />
     </div>
   );
