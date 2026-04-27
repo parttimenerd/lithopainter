@@ -15,8 +15,11 @@ interface Props {
   onFrame: (canvas: HTMLCanvasElement) => void;
   onCapture: (canvas: HTMLCanvasElement) => void;
   onCaptureWithBg: (canvas: HTMLCanvasElement) => void;
+  onCropChange: () => void;
+  onClear: () => void;
   frozen: boolean;
   setFrozen: (v: boolean) => void;
+  computedThresholds?: number[];
 }
 
 export default function SourcePanel({
@@ -28,8 +31,11 @@ export default function SourcePanel({
   onFrame,
   onCapture,
   onCaptureWithBg,
+  onCropChange,
+  onClear,
   frozen,
   setFrozen,
+  computedThresholds,
 }: Props) {
   return (
     <div className="source-panel">
@@ -54,21 +60,27 @@ export default function SourcePanel({
             onFrame={onFrame}
             onCapture={onCapture}
             onCaptureWithBg={onCaptureWithBg}
+            onCropChange={onCropChange}
             crop={crop}
             frozen={frozen}
             setFrozen={setFrozen}
             continuousMode={config.continuousMode}
+            backgroundRemoval={config.backgroundRemoval}
+            autoRemoveBgOnFreeze={config.autoRemoveBgOnFreeze}
           />
         ) : (
           <ImageUpload
             onImageReady={onCapture}
             onImageReadyWithBg={onCaptureWithBg}
+            onCropChange={onCropChange}
+            onClear={onClear}
             crop={crop}
+            backgroundRemoval={config.backgroundRemoval}
           />
         )}
       </div>
 
-      <ControlPanel config={config} onChange={setConfig} />
+      <ControlPanel config={config} onChange={setConfig} computedThresholds={computedThresholds} />
     </div>
   );
 }

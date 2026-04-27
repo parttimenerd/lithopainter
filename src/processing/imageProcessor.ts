@@ -1,4 +1,178 @@
-import { BAYER_4X4_NORM, roundToPrecision, clamp } from '../utils/mathUtils';
+import { BLUE_NOISE_16, roundToPrecision, clamp } from '../utils/mathUtils';
+import type { DitherMethod } from '../types';
+
+/**
+ * Compute default evenly-spaced thresholds for N layers.
+ * With N layers (levels = N-1), thresholds are at (i+0.5)/levels for i=0..levels-1.
+ * Returns N-1 values in [0,1].
+ */
+export function getDefaultThresholds(numLayers: number): number[] {
+  const levels = numLayers - 1;
+  if (levels <= 0) return [];
+  const t: number[] = [];
+  for (let i = 0; i < levels; i++) {
+    t.push((i + 0.5) / levels);
+  }
+  return t;
+}
+
+/**
+ * Compute optimal thresholds from image histogram using multi-level Otsu's method.
+ * Maximizes between-class variance to find the N-1 luminance boundaries that best
+ * separate the image into N distinct tonal groups.
+ * `luminance` should be the final processed (inverted) pixel data.
+ * Returns N-1 sorted thresholds in [0, 1].
+ */
+export function computeAutoThresholds(
+  luminance: Uint8Array,
+  numLayers: number,
+  bgMask?: Uint8Array
+): number[] {
+  const levels = numLayers - 1;
+  if (levels <= 0) return [];
+
+  // Build histogram of inverted luminance (0=thin, 1=thick) — foreground only
+  const bins = 256;
+  const hist = new Float64Array(bins);
+  let total = 0;
+  for (let i = 0; i < luminance.length; i++) {
+    if (bgMask && bgMask[i] === 1) continue;
+    const inv = 255 - luminance[i]; // invert: dark→high
+    hist[inv]++;
+    total++;
+  }
+  if (total === 0) return getDefaultThresholds(numLayers);
+
+  // Normalize
+  for (let i = 0; i < bins; i++) hist[i] /= total;
+
+  // For small numbers of thresholds (≤4), use exhaustive search.
+  // For more, use recursive bisection (much faster).
+  if (levels <= 4) {
+    return otsuExhaustive(hist, levels);
+  } else {
+    return otsuRecursive(hist, levels);
+  }
+}
+
+/** Exhaustive multi-Otsu: maximize between-class variance for up to 4 thresholds. */
+function otsuExhaustive(hist: Float64Array, numThresholds: number): number[] {
+  const bins = hist.length;
+  // Precompute cumulative sums
+  const P = new Float64Array(bins + 1); // cumulative probability
+  const S = new Float64Array(bins + 1); // cumulative mean
+  for (let i = 0; i < bins; i++) {
+    P[i + 1] = P[i] + hist[i];
+    S[i + 1] = S[i] + (i / 255) * hist[i];
+  }
+  const totalMean = S[bins];
+
+  // Between-class variance for a set of thresholds (bin indices)
+  function bcv(thresholds: number[]): number {
+    let variance = 0;
+    let prevT = 0;
+    const all = [...thresholds, bins];
+    for (const t of all) {
+      const w = P[t] - P[prevT];
+      if (w > 1e-10) {
+        const mu = (S[t] - S[prevT]) / w;
+        variance += w * (mu - totalMean) * (mu - totalMean);
+      }
+      prevT = t;
+    }
+    return variance;
+  }
+
+  // Search with step size to keep it fast (~O(step^numThresholds))
+  const step = Math.max(1, Math.floor(bins / 64));
+  let bestBcv = -1;
+  let bestThresholds: number[] = [];
+
+  function search(depth: number, start: number, current: number[]) {
+    if (depth === numThresholds) {
+      const v = bcv(current);
+      if (v > bestBcv) {
+        bestBcv = v;
+        bestThresholds = [...current];
+      }
+      return;
+    }
+    for (let i = start; i < bins - (numThresholds - depth) * step; i += step) {
+      current.push(i);
+      search(depth + 1, i + step, current);
+      current.pop();
+    }
+  }
+
+  search(0, step, []);
+
+  // Convert bin indices to [0, 1]
+  return bestThresholds.map(b => b / 255);
+}
+
+/** Recursive bisection Otsu for larger threshold counts. */
+function otsuRecursive(hist: Float64Array, numThresholds: number): number[] {
+  const bins = hist.length;
+
+  function otsu2(lo: number, hi: number): number {
+    // Find single best threshold in range [lo, hi)
+    let P0 = 0, S0 = 0;
+    let totalP = 0, totalS = 0;
+    for (let i = lo; i < hi; i++) {
+      totalP += hist[i];
+      totalS += (i / 255) * hist[i];
+    }
+    if (totalP < 1e-10) return Math.floor((lo + hi) / 2);
+
+    let bestT = lo;
+    let bestBcv = -1;
+    for (let t = lo + 1; t < hi; t++) {
+      P0 += hist[t - 1];
+      S0 += ((t - 1) / 255) * hist[t - 1];
+      const P1 = totalP - P0;
+      if (P0 < 1e-10 || P1 < 1e-10) continue;
+      const mu0 = S0 / P0;
+      const mu1 = (totalS - S0) / P1;
+      const diff = mu0 - mu1;
+      const v = P0 * P1 * diff * diff;
+      if (v > bestBcv) {
+        bestBcv = v;
+        bestT = t;
+      }
+    }
+    return bestT;
+  }
+
+  function bisect(lo: number, hi: number, n: number): number[] {
+    if (n <= 0) return [];
+    if (n === 1) return [otsu2(lo, hi)];
+    const mid = otsu2(lo, hi);
+    const leftCount = Math.floor((n - 1) / 2);
+    const rightCount = n - 1 - leftCount;
+    const left = bisect(lo, mid, leftCount);
+    const right = bisect(mid, hi, rightCount);
+    return [...left, mid, ...right];
+  }
+
+  const result = bisect(0, bins, numThresholds);
+  result.sort((a, b) => a - b);
+  return result.map(b => b / 255);
+}
+
+/**
+ * Map inverted luminance (0–1) to a layer level using threshold cutpoints.
+ * thresholds must be sorted ascending, length = numLayers - 1.
+ */
+function levelFromThresholds(value: number, thresholds: number[]): number {
+  for (let i = 0; i < thresholds.length; i++) {
+    if (value < thresholds[i]) return i;
+  }
+  return thresholds.length;
+}
+
+// Reusable canvases to avoid GPU-backed canvas accumulation across regenerations
+let _downsampleCanvas: HTMLCanvasElement | null = null;
+let _mirrorCanvas: HTMLCanvasElement | null = null;
 
 /**
  * Downsample a source to the physical print resolution.
@@ -9,13 +183,16 @@ export function downsampleToCanvas(
   diameterMm: number,
   nozzleWidthMm: number
 ): HTMLCanvasElement {
-  const res = Math.ceil(diameterMm / nozzleWidthMm);
-  const canvas = document.createElement('canvas');
-  canvas.width = res;
-  canvas.height = res;
-  const ctx = canvas.getContext('2d')!;
+  const res = Math.min(Math.ceil(diameterMm / nozzleWidthMm), 500);
+  if (!_downsampleCanvas) _downsampleCanvas = document.createElement('canvas');
+  _downsampleCanvas.width = res;
+  _downsampleCanvas.height = res;
+  const ctx = _downsampleCanvas.getContext('2d')!;
+  // Clear before drawing so transparent pixels from BG-removed images
+  // aren't composited onto stale opaque data from a prior frame.
+  ctx.clearRect(0, 0, res, res);
   ctx.drawImage(source, 0, 0, res, res);
-  return canvas;
+  return _downsampleCanvas;
 }
 
 /**
@@ -46,42 +223,50 @@ export function toGrayscale(canvas: HTMLCanvasElement): { lum: Uint8Array; bgMas
 }
 
 /**
- * Separable Gaussian blur (3×3 kernel).
- * Ensures minimum feature size exceeds nozzle width.
+ * Edge-preserving bilateral blur (3×3 spatial kernel).
+ * Blurs flat areas to suppress noise/dither flicker while preserving
+ * sharp luminance edges. Neighbors with large intensity differences
+ * are down-weighted via a range Gaussian.
  */
 export function applyGaussianBlur(
   data: Uint8Array,
   width: number,
   height: number
 ): Uint8Array {
-  const kernel = [0.25, 0.5, 0.25]; // 1D Gaussian kernel
-  const temp = new Float32Array(width * height);
   const out = new Uint8Array(width * height);
+  // Spatial weights: 3×3 Gaussian
+  const sw = [
+    0.0625, 0.125, 0.0625,
+    0.125,  0.25,  0.125,
+    0.0625, 0.125, 0.0625,
+  ];
+  // Range sigma: how much intensity difference is tolerated before reducing weight.
+  // ~30/255 means edges with >~60 luma difference are strongly preserved.
+  const rangeSigma = 30;
+  const rangeDenom = -1 / (2 * rangeSigma * rangeSigma);
 
-  // Horizontal pass
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      let sum = 0;
-      for (let k = -1; k <= 1; k++) {
-        const sx = clamp(x + k, 0, width - 1);
-        sum += data[y * width + sx] * kernel[k + 1];
+      const idx = y * width + x;
+      const center = data[idx];
+      let sumW = 0;
+      let sumV = 0;
+      let ki = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const sy = clamp(y + dy, 0, height - 1);
+        for (let dx = -1; dx <= 1; dx++) {
+          const sx = clamp(x + dx, 0, width - 1);
+          const val = data[sy * width + sx];
+          const diff = val - center;
+          const rangeW = Math.exp(diff * diff * rangeDenom);
+          const w = sw[ki++] * rangeW;
+          sumW += w;
+          sumV += val * w;
+        }
       }
-      temp[y * width + x] = sum;
+      out[idx] = clamp(Math.round(sumV / sumW), 0, 255);
     }
   }
-
-  // Vertical pass
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      let sum = 0;
-      for (let k = -1; k <= 1; k++) {
-        const sy = clamp(y + k, 0, height - 1);
-        sum += temp[sy * width + x] * kernel[k + 1];
-      }
-      out[y * width + x] = clamp(Math.round(sum), 0, 255);
-    }
-  }
-
   return out;
 }
 
@@ -105,39 +290,72 @@ export function bayerDither(
   numLayers: number,
   layerHeightMm: number,
   baseLayerHeightMm: number,
-  bgMask?: Uint8Array
+  bgMask?: Uint8Array,
+  dithering = 1.0,
+  thresholds?: number[],
+  reserveLayerForBg = true
 ): Float32Array {
   const heights = new Float32Array(width * height);
   const hasBg = bgMask && bgMask.some((v) => v === 1);
 
-  // With bg mask: foreground uses ALL numLayers (layers 1..numLayers).
-  // Background gets half a layer height — thinner than layer 1 but not zero
-  // (zero = outside circle / folded to rim).
-  const levels = Math.max(numLayers - 1, 1); // number of intervals
+  const levels = numLayers - 1;
+  const t = thresholds && thresholds.length === levels ? thresholds : getDefaultThresholds(numLayers);
+
+  // Precompute edge strength map (Sobel gradient magnitude) to reduce
+  // dithering at strong luminance edges, preserving sharp transitions.
+  const edgeStrength = new Float32Array(width * height);
+  if (dithering > 0) {
+    let maxEdge = 0;
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const idx = y * width + x;
+        // Sobel X
+        const gx = -luminance[(y - 1) * width + (x - 1)] - 2 * luminance[y * width + (x - 1)] - luminance[(y + 1) * width + (x - 1)]
+                  + luminance[(y - 1) * width + (x + 1)] + 2 * luminance[y * width + (x + 1)] + luminance[(y + 1) * width + (x + 1)];
+        // Sobel Y
+        const gy = -luminance[(y - 1) * width + (x - 1)] - 2 * luminance[(y - 1) * width + x] - luminance[(y - 1) * width + (x + 1)]
+                  + luminance[(y + 1) * width + (x - 1)] + 2 * luminance[(y + 1) * width + x] + luminance[(y + 1) * width + (x + 1)];
+        const mag = Math.sqrt(gx * gx + gy * gy);
+        edgeStrength[idx] = mag;
+        if (mag > maxEdge) maxEdge = mag;
+      }
+    }
+    // Normalize to 0-1
+    if (maxEdge > 0) {
+      for (let i = 0; i < edgeStrength.length; i++) {
+        edgeStrength[i] /= maxEdge;
+      }
+    }
+  }
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = y * width + x;
 
-      // Background pixel → half base layer height (distinct from layer 1)
       if (hasBg && bgMask![idx] === 1) {
         heights[idx] = roundToPrecision(0.5 * baseLayerHeightMm, 2);
         continue;
       }
 
-      const lum = luminance[idx] / 255; // 0 = black (thick), 1 = white (thin)
+      if (levels === 0) {
+        heights[idx] = roundToPrecision(baseLayerHeightMm, 2);
+        continue;
+      }
 
-      // Invert: dark areas → high Z (thick)
+      const lum = luminance[idx] / 255;
       const inverted = 1 - lum;
 
-      // Standard ordered dithering: Bayer threshold offsets fractional position
-      const threshold = BAYER_4X4_NORM[y % 4][x % 4];
-      const level = clamp(Math.floor(inverted * levels + threshold), 0, levels);
+      // Edge-aware dithering: reduce dither strength at strong edges
+      const edgeFactor = 1 - edgeStrength[idx];
+      const effectiveDither = dithering * edgeFactor;
 
-      // Map level to physical height: base layer + additional layers
+      const threshold = BLUE_NOISE_16[y % 16][x % 16];
+      const ditherOffset = (threshold - 0.5) * effectiveDither; // center around 0
+      const dithered = inverted + ditherOffset / levels;
+      const minLevel = (hasBg && reserveLayerForBg) ? 1 : 0;
+      const level = clamp(levelFromThresholds(dithered, t), minLevel, levels);
+
       const heightMm = baseLayerHeightMm + level * layerHeightMm;
-
-      // IEEE 754 safe rounding
       heights[idx] = roundToPrecision(heightMm, 2);
     }
   }
@@ -146,7 +364,412 @@ export function bayerDither(
 }
 
 /**
+ * Floyd-Steinberg error-diffusion dithering.
+ * Produces smooth organic gradients without repeating patterns.
+ * Quantization error is distributed to neighboring unvisited pixels.
+ * For lithopanes: dark = thick (high Z), bright = thin (low Z).
+ */
+export function floydSteinbergDither(
+  luminance: Uint8Array,
+  width: number,
+  height: number,
+  numLayers: number,
+  layerHeightMm: number,
+  baseLayerHeightMm: number,
+  bgMask?: Uint8Array,
+  dithering = 1.0,
+  thresholds?: number[],
+  reserveLayerForBg = true
+): Float32Array {
+  const heights = new Float32Array(width * height);
+  const hasBg = bgMask && bgMask.some((v) => v === 1);
+  const levels = numLayers - 1;
+  const t = thresholds && thresholds.length === levels ? thresholds : getDefaultThresholds(numLayers);
+
+  if (levels === 0) {
+    for (let i = 0; i < heights.length; i++) {
+      if (hasBg && bgMask![i] === 1) {
+        heights[i] = roundToPrecision(0.5 * baseLayerHeightMm, 2);
+      } else {
+        heights[i] = roundToPrecision(baseLayerHeightMm, 2);
+      }
+    }
+    return heights;
+  }
+
+  // Working buffer in floating point (0–1 inverted luminance)
+  const buf = new Float32Array(width * height);
+  for (let i = 0; i < buf.length; i++) {
+    buf[i] = 1 - luminance[i] / 255; // inverted: dark→1 (thick), bright→0 (thin)
+  }
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+
+      if (hasBg && bgMask![idx] === 1) {
+        heights[idx] = roundToPrecision(0.5 * baseLayerHeightMm, 2);
+        continue;
+      }
+
+      const old = buf[idx];
+      const minLevel = (hasBg && reserveLayerForBg) ? 1 : 0;
+      const level = clamp(levelFromThresholds(old, t), minLevel, levels);
+      const quantized = level / levels;
+      heights[idx] = roundToPrecision(baseLayerHeightMm + level * layerHeightMm, 2);
+
+      // Distribute error to neighbors, scaled by dithering strength
+      const err = (old - quantized) * dithering;
+      if (x + 1 < width)                    buf[idx + 1]         += err * 7 / 16;
+      if (y + 1 < height && x > 0)          buf[idx + width - 1] += err * 3 / 16;
+      if (y + 1 < height)                   buf[idx + width]     += err * 5 / 16;
+      if (y + 1 < height && x + 1 < width)  buf[idx + width + 1] += err * 1 / 16;
+    }
+  }
+
+  return heights;
+}
+
+/**
+ * Generic error-diffusion dithering engine.
+ * Takes a diffusion kernel (array of {dx, dy, weight} offsets) and a divisor.
+ * All error-diffusion variants (Floyd-Steinberg, Atkinson, JJN, Stucki) use this.
+ */
+function errorDiffusionDither(
+  luminance: Uint8Array,
+  width: number,
+  height: number,
+  numLayers: number,
+  layerHeightMm: number,
+  baseLayerHeightMm: number,
+  kernel: { dx: number; dy: number; w: number }[],
+  divisor: number,
+  bgMask?: Uint8Array,
+  dithering = 1.0,
+  thresholds?: number[],
+  reserveLayerForBg = true
+): Float32Array {
+  const heights = new Float32Array(width * height);
+  const hasBg = bgMask && bgMask.some((v) => v === 1);
+  const levels = numLayers - 1;
+  const t = thresholds && thresholds.length === levels ? thresholds : getDefaultThresholds(numLayers);
+
+  if (levels === 0) {
+    for (let i = 0; i < heights.length; i++) {
+      if (hasBg && bgMask![i] === 1) {
+        heights[i] = roundToPrecision(0.5 * baseLayerHeightMm, 2);
+      } else {
+        heights[i] = roundToPrecision(baseLayerHeightMm, 2);
+      }
+    }
+    return heights;
+  }
+
+  const buf = new Float32Array(width * height);
+  for (let i = 0; i < buf.length; i++) {
+    buf[i] = 1 - luminance[i] / 255;
+  }
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+
+      if (hasBg && bgMask![idx] === 1) {
+        heights[idx] = roundToPrecision(0.5 * baseLayerHeightMm, 2);
+        continue;
+      }
+
+      const old = buf[idx];
+      const minLevel = (hasBg && reserveLayerForBg) ? 1 : 0;
+      const level = clamp(levelFromThresholds(old, t), minLevel, levels);
+      const quantized = level / levels;
+      heights[idx] = roundToPrecision(baseLayerHeightMm + level * layerHeightMm, 2);
+
+      const err = (old - quantized) * dithering;
+      for (const k of kernel) {
+        const nx = x + k.dx;
+        const ny = y + k.dy;
+        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+          buf[ny * width + nx] += err * k.w / divisor;
+        }
+      }
+    }
+  }
+
+  return heights;
+}
+
+/**
+ * Atkinson error-diffusion dithering.
+ * Only distributes 75% of the quantization error (6/8), producing
+ * more open, contrasty results. Popular in early Mac rendering.
+ * Better for 3D printing than Floyd-Steinberg: fewer isolated dots.
+ */
+export function atkinsonDither(
+  luminance: Uint8Array,
+  width: number,
+  height: number,
+  numLayers: number,
+  layerHeightMm: number,
+  baseLayerHeightMm: number,
+  bgMask?: Uint8Array,
+  dithering = 1.0,
+  thresholds?: number[],
+  reserveLayerForBg = true
+): Float32Array {
+  // Atkinson distributes 1/8 to 6 neighbors (total 6/8 = 75%)
+  const kernel = [
+    { dx: 1, dy: 0, w: 1 },
+    { dx: 2, dy: 0, w: 1 },
+    { dx: -1, dy: 1, w: 1 },
+    { dx: 0, dy: 1, w: 1 },
+    { dx: 1, dy: 1, w: 1 },
+    { dx: 0, dy: 2, w: 1 },
+  ];
+  return errorDiffusionDither(luminance, width, height, numLayers, layerHeightMm, baseLayerHeightMm, kernel, 8, bgMask, dithering, thresholds, reserveLayerForBg);
+}
+
+/**
+ * Jarvis-Judice-Ninke error-diffusion dithering.
+ * 5×3 kernel distributes error over 12 neighbors, producing the
+ * smoothest perceptual gradients of any error diffusion method.
+ * Spreads error wider → fewer visible patterns.
+ */
+export function jarvisJudiceNinkeDither(
+  luminance: Uint8Array,
+  width: number,
+  height: number,
+  numLayers: number,
+  layerHeightMm: number,
+  baseLayerHeightMm: number,
+  bgMask?: Uint8Array,
+  dithering = 1.0,
+  thresholds?: number[],
+  reserveLayerForBg = true
+): Float32Array {
+  //            *   7   5
+  //  3   5   7   5   3
+  //  1   3   5   3   1
+  // divisor = 48
+  const kernel = [
+    { dx: 1, dy: 0, w: 7 }, { dx: 2, dy: 0, w: 5 },
+    { dx: -2, dy: 1, w: 3 }, { dx: -1, dy: 1, w: 5 }, { dx: 0, dy: 1, w: 7 }, { dx: 1, dy: 1, w: 5 }, { dx: 2, dy: 1, w: 3 },
+    { dx: -2, dy: 2, w: 1 }, { dx: -1, dy: 2, w: 3 }, { dx: 0, dy: 2, w: 5 }, { dx: 1, dy: 2, w: 3 }, { dx: 2, dy: 2, w: 1 },
+  ];
+  return errorDiffusionDither(luminance, width, height, numLayers, layerHeightMm, baseLayerHeightMm, kernel, 48, bgMask, dithering, thresholds, reserveLayerForBg);
+}
+
+/**
+ * Stucki error-diffusion dithering.
+ * 5×3 kernel similar to JJN but with slightly different weights,
+ * producing a middle ground between Floyd-Steinberg sharpness and
+ * JJN smoothness. Good balance of detail and gradient fidelity.
+ */
+export function stuckiDither(
+  luminance: Uint8Array,
+  width: number,
+  height: number,
+  numLayers: number,
+  layerHeightMm: number,
+  baseLayerHeightMm: number,
+  bgMask?: Uint8Array,
+  dithering = 1.0,
+  thresholds?: number[],
+  reserveLayerForBg = true
+): Float32Array {
+  //            *   8   4
+  //  2   4   8   4   2
+  //  1   2   4   2   1
+  // divisor = 42
+  const kernel = [
+    { dx: 1, dy: 0, w: 8 }, { dx: 2, dy: 0, w: 4 },
+    { dx: -2, dy: 1, w: 2 }, { dx: -1, dy: 1, w: 4 }, { dx: 0, dy: 1, w: 8 }, { dx: 1, dy: 1, w: 4 }, { dx: 2, dy: 1, w: 2 },
+    { dx: -2, dy: 2, w: 1 }, { dx: -1, dy: 2, w: 2 }, { dx: 0, dy: 2, w: 4 }, { dx: 1, dy: 2, w: 2 }, { dx: 2, dy: 2, w: 1 },
+  ];
+  return errorDiffusionDither(luminance, width, height, numLayers, layerHeightMm, baseLayerHeightMm, kernel, 42, bgMask, dithering, thresholds, reserveLayerForBg);
+}
+
+/**
+ * Hard quantization — no dithering.
+ * Each pixel is rounded to the nearest discrete layer.
+ * Produces clean, sharp bands between tonal zones.
+ */
+export function hardQuantize(
+  luminance: Uint8Array,
+  width: number,
+  height: number,
+  numLayers: number,
+  layerHeightMm: number,
+  baseLayerHeightMm: number,
+  bgMask?: Uint8Array,
+  thresholds?: number[],
+  reserveLayerForBg = true
+): Float32Array {
+  const heights = new Float32Array(width * height);
+  const hasBg = bgMask && bgMask.some((v) => v === 1);
+  const levels = numLayers - 1;
+  const t = thresholds && thresholds.length === levels ? thresholds : getDefaultThresholds(numLayers);
+
+  for (let i = 0; i < heights.length; i++) {
+    if (hasBg && bgMask![i] === 1) {
+      heights[i] = roundToPrecision(0.5 * baseLayerHeightMm, 2);
+      continue;
+    }
+    if (levels === 0) {
+      heights[i] = roundToPrecision(baseLayerHeightMm, 2);
+      continue;
+    }
+    const inverted = 1 - luminance[i] / 255;
+    const minLevel = (hasBg && reserveLayerForBg) ? 1 : 0;
+    const level = clamp(levelFromThresholds(inverted, t), minLevel, levels);
+    heights[i] = roundToPrecision(baseLayerHeightMm + level * layerHeightMm, 2);
+  }
+
+  return heights;
+}
+
+/**
  * Apply circular mask: set heights outside inscribed circle to 0.
+/**
+ * Morphological closing (dilation then erosion) on a quantized heightmap.
+ * Connects diagonally adjacent dithered dots into printable ridges
+ * that the Arachne wall generator can trace as continuous toolpaths.
+ * Uses a 3×3 circular kernel (diamond shape: skip corners).
+ */
+export function morphologicalClose(
+  heights: Float32Array,
+  width: number,
+  height: number,
+  bgMask?: Uint8Array
+): Float32Array {
+  // 3×3 diamond kernel offsets (excluding corners for circular shape)
+  const kernel = [
+    [0, 0], [-1, 0], [1, 0], [0, -1], [0, 1],
+  ];
+
+  // Dilation: take max in neighborhood (skip BG pixels)
+  const dilated = new Float32Array(heights.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (bgMask && bgMask[idx] === 1) { dilated[idx] = heights[idx]; continue; }
+      let maxVal = 0;
+      for (const [dx, dy] of kernel) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+          const ni = ny * width + nx;
+          if (bgMask && bgMask[ni] === 1) continue; // don't sample BG neighbors
+          const v = heights[ni];
+          if (v > maxVal) maxVal = v;
+        }
+      }
+      dilated[idx] = maxVal;
+    }
+  }
+
+  // Erosion: take min in neighborhood (skip BG pixels)
+  const closed = new Float32Array(heights.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (bgMask && bgMask[idx] === 1) { closed[idx] = dilated[idx]; continue; }
+      let minVal = Infinity;
+      for (const [dx, dy] of kernel) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+          const ni = ny * width + nx;
+          if (bgMask && bgMask[ni] === 1) continue; // don't sample BG neighbors
+          const v = dilated[ni];
+          if (v < minVal) minVal = v;
+        }
+      }
+      closed[idx] = minVal;
+    }
+  }
+  return closed;
+}
+
+/**
+ * Chamfer Z-step edges in a quantized heightmap.
+ * Applies a small Gaussian blur (~0.5px radius) only at pixels that border
+ * a different layer height. This creates ~45° slopes between layers so the
+ * slicer sees inset perimeters rather than isolated islands.
+ * Does NOT re-quantize — the intermediate Z values are the slopes that
+ * Arachne needs to generate continuous, variable-width toolpaths.
+ */
+export function chamferEdges(
+  heights: Float32Array,
+  width: number,
+  height: number,
+  layerHeightMm: number,
+  baseLayerHeightMm: number,
+  bgMask?: Uint8Array
+): Float32Array {
+  // Detect edge pixels (adjacent to a different height) — skip BG pixels
+  const isEdge = new Uint8Array(heights.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      if (bgMask && bgMask[idx] === 1) continue; // don't chamfer BG pixels
+      const h = heights[idx];
+      if (h === 0) continue; // skip exterior
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+            const ni = ny * width + nx;
+            if (bgMask && bgMask[ni] === 1) continue; // don't compare against BG
+            if (heights[ni] !== h && heights[ni] > 0) {
+              isEdge[idx] = 1;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Apply 3×3 Gaussian blur only at edge pixels
+  const kernel = [
+    1, 2, 1,
+    2, 4, 2,
+    1, 2, 1,
+  ];
+  const kernelSum = 16;
+  const result = new Float32Array(heights);
+
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const idx = y * width + x;
+      if (!isEdge[idx]) continue;
+      let sum = 0;
+      let ki = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const v = heights[(y + dy) * width + (x + dx)];
+          if (v > 0) {
+            sum += v * kernel[ki];
+          } else {
+            // Don't blend with exterior (Z=0) — use center value instead
+            sum += heights[idx] * kernel[ki];
+          }
+          ki++;
+        }
+      }
+      // Keep the continuous blurred value — do NOT re-quantize.
+      // The intermediate Z creates a ~45° slope that Arachne interprets
+      // as inset perimeters rather than separate islands.
+      result[idx] = Math.max(baseLayerHeightMm, sum / kernelSum);
+    }
+  }
+  return result;
+}
+
+/**
+ * Apply a circular mask to the heightmap, zeroing pixels outside the inscribed circle.
  * These vertices will be "folded" to the rim during mesh generation.
  * When feather > 0, smoothly blend heights near the circle edge toward
  * baseLayerHeight over a feather zone, preventing hard thickness transitions
@@ -428,21 +1051,53 @@ function mirrorCanvas(
 ): HTMLCanvasElement {
   const sw = source instanceof HTMLCanvasElement ? source.width : source.naturalWidth || source.width;
   const sh = source instanceof HTMLCanvasElement ? source.height : source.naturalHeight || source.height;
-  const canvas = document.createElement('canvas');
-  canvas.width = sw;
-  canvas.height = sh;
-  const ctx = canvas.getContext('2d')!;
+  if (!_mirrorCanvas) _mirrorCanvas = document.createElement('canvas');
+  _mirrorCanvas.width = sw;
+  _mirrorCanvas.height = sh;
+  const ctx = _mirrorCanvas.getContext('2d')!;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); // reset transform from prior use
   // Horizontal flip (X-axis mirror) — lithopanes are viewed from behind
   ctx.translate(sw, 0);
   ctx.scale(-1, 1);
   ctx.drawImage(source, 0, 0);
-  return canvas;
+  return _mirrorCanvas;
+}
+
+/**
+ * Adaptive segmentation: locally remap luminance so different image regions
+ * get different effective layer distributions. Computes a large-radius local
+ * mean, then shifts each pixel toward the global midpoint (128), scaled by
+ * the amount parameter. Regions with similar tones get spread across more
+ * layers, revealing local detail that uniform thresholds would collapse.
+ */
+export function applyAdaptiveSegmentation(
+  data: Uint8Array,
+  width: number,
+  height: number,
+  amount: number
+): Uint8Array {
+  if (amount <= 0) return data;
+
+  // Large radius (~1/4 image) for broad regional adaptation
+  const radius = Math.max(Math.round(Math.min(width, height) / 4), 3);
+  const localMean = gaussianBlurWide(data, width, height, radius);
+
+  const out = new Uint8Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    const deviation = data[i] - localMean[i];
+    // Center around 128, expanding local contrast
+    const remapped = 128 + deviation * 1.5;
+    // Blend between original and remapped based on amount
+    const v = data[i] * (1 - amount) + remapped * amount;
+    out[i] = clamp(Math.round(v), 0, 255);
+  }
+  return out;
 }
 
 /**
  * Full processing pipeline:
  * source → downsample → grayscale → auto-levels → brightness/contrast →
- * gamma → shadows/highlights → local contrast → edge enhance → blur → dither → mask
+ * gamma → shadows/highlights → local contrast → edge enhance → adaptive → blur → dither → mask
  */
 export function processImage(
   source: HTMLCanvasElement | HTMLImageElement,
@@ -460,8 +1115,15 @@ export function processImage(
   localContrast = 0,
   autoLevels = false,
   mirror = false,
-  edgeFeather = 0
-): { heightmap: Float32Array; resolution: number } {
+  edgeFeather = 0,
+  dithering = 0.5,
+  ditherMethod: DitherMethod = 'blue-noise',
+  layerThresholds: number[] = [],
+  adaptiveSegmentation = 0,
+  autoThresholds = true,
+  reserveLayerForBg = true,
+  arachneOptimize = false
+): { heightmap: Float32Array; resolution: number; computedThresholds?: number[] } {
   // Mirror the source canvas if requested (horizontal flip for face-down printing)
   const actualSource = mirror ? mirrorCanvas(source) : source;
 
@@ -481,11 +1143,66 @@ export function processImage(
   processed = applyLocalContrast(processed, res, res, localContrast);
   // 6. Edge enhancement (unsharp mask)
   processed = applyEdgeEnhance(processed, res, res, edgeEnhance);
-  // 7. Final smoothing to ensure features exceed nozzle width
-  const blurred = applyGaussianBlur(processed, res, res);
-  // 8. Quantize to layers via ordered dithering
-  const heights = bayerDither(blurred, res, res, numLayers, layerHeightMm, baseLayerHeightMm, bgMask);
+  // 7. Adaptive segmentation (locally remap luminance for region-aware layer allocation)
+  processed = applyAdaptiveSegmentation(processed, res, res, adaptiveSegmentation);
+  // 8. Final smoothing — two passes of 3×3 Gaussian (~5×5 effective)
+  //    to suppress sensor noise that causes dithering flicker
+  const blurred = applyGaussianBlur(applyGaussianBlur(processed, res, res), res, res);
+  // 9. Quantize to layers via selected dithering method
+  let thresholds: number[] | undefined;
+  if (layerThresholds.length === numLayers - 1) {
+    // User has manually set thresholds — use those
+    thresholds = layerThresholds;
+  } else if (autoThresholds) {
+    // Auto-compute optimal thresholds from the processed image histogram
+    thresholds = computeAutoThresholds(blurred, numLayers, bgMask);
+  }
+  let heights: Float32Array;
+  switch (ditherMethod) {
+    case 'floyd-steinberg':
+      heights = floydSteinbergDither(blurred, res, res, numLayers, layerHeightMm, baseLayerHeightMm, bgMask, dithering, thresholds, reserveLayerForBg);
+      break;
+    case 'atkinson':
+      heights = atkinsonDither(blurred, res, res, numLayers, layerHeightMm, baseLayerHeightMm, bgMask, dithering, thresholds, reserveLayerForBg);
+      break;
+    case 'jarvis-judice-ninke':
+      heights = jarvisJudiceNinkeDither(blurred, res, res, numLayers, layerHeightMm, baseLayerHeightMm, bgMask, dithering, thresholds, reserveLayerForBg);
+      break;
+    case 'stucki':
+      heights = stuckiDither(blurred, res, res, numLayers, layerHeightMm, baseLayerHeightMm, bgMask, dithering, thresholds, reserveLayerForBg);
+      break;
+    case 'none':
+      heights = hardQuantize(blurred, res, res, numLayers, layerHeightMm, baseLayerHeightMm, bgMask, thresholds, reserveLayerForBg);
+      break;
+    case 'bayer':
+    case 'blue-noise':
+    default:
+      heights = bayerDither(blurred, res, res, numLayers, layerHeightMm, baseLayerHeightMm, bgMask, dithering, thresholds, reserveLayerForBg);
+      break;
+  }
   applyCircularMask(heights, res, res, edgeFeather, baseLayerHeightMm);
 
-  return { heightmap: heights, resolution: res };
+  // 10. Arachne optimizations:
+  //  a) Enforce 2-layer solid base — heightmap data only affects layers above
+  //     baseLayer + layerHeight. This prevents single-pixel pillars at 1 layer
+  //     and gives a uniform diffuser foundation for backlighting.
+  //  b) Morphological closing to connect isolated dithered dots into printable ridges.
+  //  c) Chamfer Z-step edges to create continuous slopes (NOT re-quantized)
+  //     so the slicer sees inset perimeters rather than separate islands.
+  if (arachneOptimize) {
+    const solidBase = baseLayerHeightMm + layerHeightMm;
+    for (let i = 0; i < heights.length; i++) {
+      // Skip BG pixels — they use half-base height for light transmission
+      if (bgMask[i] === 1) continue;
+      if (heights[i] > 0 && heights[i] < solidBase) {
+        heights[i] = solidBase;
+      }
+    }
+    heights = morphologicalClose(heights, res, res, bgMask);
+    heights = chamferEdges(heights, res, res, layerHeightMm, baseLayerHeightMm, bgMask);
+    // Re-apply circular mask after morphological ops
+    applyCircularMask(heights, res, res, edgeFeather, baseLayerHeightMm);
+  }
+
+  return { heightmap: heights, resolution: res, computedThresholds: thresholds };
 }

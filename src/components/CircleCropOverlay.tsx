@@ -1,4 +1,4 @@
-import { type PointerEvent as ReactPointerEvent, useRef, useState, useLayoutEffect, useMemo } from 'react';
+import { type PointerEvent as ReactPointerEvent, useRef, useState, useEffect, useLayoutEffect, useMemo } from 'react';
 import type { CropCircle } from '../types';
 
 interface Props {
@@ -7,6 +7,7 @@ interface Props {
   onPointerDown: (e: ReactPointerEvent, action: 'move' | 'resize', contentW: number, contentH: number) => void;
   onPointerMove: (e: ReactPointerEvent, contentW: number, contentH: number) => void;
   onPointerUp: () => void;
+  onWheel?: (deltaY: number, contentW: number, contentH: number) => void;
 }
 
 /** Compute the visible content area within the container for object-fit: contain */
@@ -28,9 +29,10 @@ function computeContainFit(containerW: number, containerH: number, sourceAR: num
   };
 }
 
-export default function CircleCropOverlay({ crop, sourceAspectRatio, onPointerDown, onPointerMove, onPointerUp }: Props) {
+export default function CircleCropOverlay({ crop, sourceAspectRatio, onPointerDown, onPointerMove, onPointerUp, onWheel }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 100, h: 100 });
+  const maskId = useMemo(() => `crop-mask-${Math.random().toString(36).slice(2, 9)}`, []);
 
   useLayoutEffect(() => {
     const el = containerRef.current;
@@ -50,6 +52,24 @@ export default function CircleCropOverlay({ crop, sourceAspectRatio, onPointerDo
     }
     return { displayW: size.w, displayH: size.h, offsetX: 0, offsetY: 0 };
   }, [size.w, size.h, sourceAspectRatio]);
+
+  // Wheel zoom — native event with { passive: false } to allow preventDefault
+  const fitRef = useRef(fit);
+  fitRef.current = fit;
+  const onWheelRef = useRef(onWheel);
+  onWheelRef.current = onWheel;
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      if (onWheelRef.current) {
+        e.preventDefault();
+        onWheelRef.current(e.deltaY, fitRef.current.displayW, fitRef.current.displayH);
+      }
+    };
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, []);
 
   // Crop coords are in source-normalized space (0-1).
   // Map to container pixels via the contain-fit area.
@@ -74,7 +94,7 @@ export default function CircleCropOverlay({ crop, sourceAspectRatio, onPointerDo
         style={{ position: 'absolute', top: 0, left: 0 }}
       >
         <defs>
-          <mask id="crop-mask">
+          <mask id={maskId}>
             <rect width={size.w} height={size.h} fill="white" />
             <circle cx={cxPx} cy={cyPx} r={rPx} fill="black" />
           </mask>
@@ -85,7 +105,7 @@ export default function CircleCropOverlay({ crop, sourceAspectRatio, onPointerDo
           width={size.w}
           height={size.h}
           fill="rgba(0,0,0,0.6)"
-          mask="url(#crop-mask)"
+          mask={`url(#${maskId})`}
         />
 
         {/* Circle border */}

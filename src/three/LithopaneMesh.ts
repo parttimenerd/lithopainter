@@ -15,6 +15,8 @@ import { roundToPrecision } from '../utils/mathUtils';
  * Compute optimal notch angles biased toward thicker rim areas.
  * Samples the heightmap around the circle perimeter and places notches
  * where material is thickest — providing better structural support.
+ * After greedy placement, ensures no gap exceeds a maximum angular span
+ * so there are no totally unsupported areas.
  */
 function computeNotchAngles(
   heightmap: Float32Array,
@@ -43,10 +45,8 @@ function computeNotchAngles(
   // Use height^2 to strongly favor thick spots, with a floor so thin areas
   // still have some weight (avoids all notches clustering in one spot)
   const weights = new Float32Array(numSamples);
-  let totalWeight = 0;
   for (let i = 0; i < numSamples; i++) {
     weights[i] = 1 + rimHeights[i] * rimHeights[i];
-    totalWeight += weights[i];
   }
 
   // Place notches greedily: pick the highest-weight position, then exclude
@@ -78,7 +78,40 @@ function computeNotchAngles(
 
   // Sort for consistent ordering
   angles.sort((a, b) => a - b);
+
+  // Ensure no gap between consecutive notches exceeds the maximum allowed span.
+  // Max gap = 1.8× the even spacing (so with 10 notches at 36° each, max ~65°).
+  // Cap total notches at 1.5× requested to avoid runaway insertion.
+  const maxGap = (2 * Math.PI / numNotches) * 1.8;
+  const maxTotalNotches = Math.ceil(numNotches * 1.5);
+  for (let safety = 0; safety < numNotches * 2 && angles.length < maxTotalNotches; safety++) {
+    let worstGap = 0;
+    let worstIdx = -1;
+    for (let i = 0; i < angles.length; i++) {
+      const next = (i + 1) % angles.length;
+      let gap = angles[next] - angles[i];
+      if (gap <= 0) gap += 2 * Math.PI; // wrap around
+      if (gap > worstGap) {
+        worstGap = gap;
+        worstIdx = i;
+      }
+    }
+    if (worstGap <= maxGap) break;
+    // Split the largest gap by inserting a notch at its midpoint
+    const next = (worstIdx + 1) % angles.length;
+    let mid = (angles[worstIdx] + angles[next]) / 2;
+    if (angles[next] <= angles[worstIdx]) mid = angles[worstIdx] + worstGap / 2;
+    if (mid >= 2 * Math.PI) mid -= 2 * Math.PI;
+    angles.push(mid);
+    angles.sort((a, b) => a - b);
+  }
+
   return angles;
+}
+
+export interface LithopaneGeometry {
+  body: THREE.BufferGeometry;
+  notches: THREE.BufferGeometry | null;
 }
 
 export function generateLithopaneMesh(
@@ -90,50 +123,105 @@ export function generateLithopaneMesh(
   numNotches: number,
   notchRadiusMm: number,
   notchHeightMm: number,
-  baseLayerHeightMm: number
-): THREE.BufferGeometry {
+  baseLayerHeightMm: number,
+  arachneOptimize = false,
+  nozzleWidthMm = 0.4
+): LithopaneGeometry {
   const radiusMm = diameterMm / 2;
   const baseHeight = baseLayerHeightMm; // minimum height for interior points
-  const maxHeight = roundToPrecision(baseLayerHeightMm + (numLayers - 1) * layerHeightMm, 2);
 
-  // Step A: Create PlaneGeometry — segments match heightmap resolution
-  const segments = resolution - 1; // PlaneGeometry(w, h, segsX, segsY) creates (segsX+1) × (segsY+1) vertices
-  const plane = new THREE.PlaneGeometry(diameterMm, diameterMm, segments, segments);
+  // Arachne mode: use half-nozzle vertex spacing (~0.2mm).
+  // Finer than slicer simplification threshold so contours are smooth,
+  // but not so fine that mesh generation becomes slow.
+  const defaultSpacing = diameterMm / (resolution - 1);
+  const vertexSpacingMm = arachneOptimize
+    ? Math.max(nozzleWidthMm / 2, 0.15)
+    : defaultSpacing;
+  const meshSegments = arachneOptimize
+    ? Math.ceil(diameterMm / vertexSpacingMm)
+    : resolution - 1;
 
-  // Step B: CPU displacement — modify position array directly
-  const pos = plane.attributes.position as THREE.BufferAttribute;
-  const count = pos.count;
+  // Step A: Build vertex grid
+  const gridSize = meshSegments + 1;
+  const positions = new Float32Array(gridSize * gridSize * 3);
+  const mmPerPixel = diameterMm / resolution;
 
-  for (let i = 0; i < count; i++) {
-    const x = pos.getX(i);
-    const y = pos.getY(i);
-    const r = Math.sqrt(x * x + y * y);
+  for (let gy = 0; gy < gridSize; gy++) {
+    for (let gx = 0; gx < gridSize; gx++) {
+      const x = -radiusMm + gx * vertexSpacingMm;
+      const y = radiusMm - gy * vertexSpacingMm;
+      const r = Math.sqrt(x * x + y * y);
+      const vi = (gy * gridSize + gx) * 3;
 
-    if (r <= radiusMm) {
-      // Map vertex (x, y) → heightmap pixel
-      // PlaneGeometry ranges from -diameter/2 to +diameter/2
-      const u = (x + radiusMm) / diameterMm; // 0–1
-      const v = 1 - (y + radiusMm) / diameterMm; // 0–1, flipped for image coords
+      if (r <= radiusMm) {
+        const u = (x + radiusMm) / diameterMm;
+        const v = 1 - (y + radiusMm) / diameterMm;
 
-      const px = Math.min(Math.floor(u * resolution), resolution - 1);
-      const py = Math.min(Math.floor(v * resolution), resolution - 1);
-      const heightVal = heightmap[py * resolution + px];
+        // Bilinear sample from heightmap
+        const fx = u * (resolution - 1);
+        const fy = v * (resolution - 1);
+        const ix = Math.min(Math.floor(fx), resolution - 2);
+        const iy = Math.min(Math.floor(fy), resolution - 2);
+        const dx = fx - ix;
+        const dy = fy - iy;
+        const h00 = heightmap[iy * resolution + ix];
+        const h10 = heightmap[iy * resolution + ix + 1];
+        const h01 = heightmap[(iy + 1) * resolution + ix];
+        const h11 = heightmap[(iy + 1) * resolution + ix + 1];
+        const heightVal = h00 * (1 - dx) * (1 - dy) + h10 * dx * (1 - dy)
+                        + h01 * (1 - dx) * dy + h11 * dx * dy;
 
-      // Z = height from heightmap (already quantized to layer steps)
-      // Ensure at least base height for interior pixels
-      pos.setZ(i, heightVal > 0 ? heightVal : baseHeight);
-    } else {
-      // Exterior vertices: FOLD to circle perimeter at Z=0
-      const theta = Math.atan2(y, x);
-      pos.setX(i, radiusMm * Math.cos(theta));
-      pos.setY(i, radiusMm * Math.sin(theta));
-      pos.setZ(i, 0);
+        positions[vi] = x;
+        positions[vi + 1] = y;
+        positions[vi + 2] = heightVal > 0 ? heightVal : baseHeight;
+      } else {
+        const theta = Math.atan2(y, x);
+        positions[vi] = radiusMm * Math.cos(theta);
+        positions[vi + 1] = radiusMm * Math.sin(theta);
+        positions[vi + 2] = 0;
+      }
     }
   }
-  pos.needsUpdate = true;
+
+  // Step B: Build index buffer with smart diagonal splitting
+  // For each quad, split along the diagonal connecting the two vertices with
+  // closest Z-heights to minimize artificial ridges.
+  const indices: number[] = [];
+  for (let gy = 0; gy < meshSegments; gy++) {
+    for (let gx = 0; gx < meshSegments; gx++) {
+      const a = gy * gridSize + gx;           // top-left
+      const b = a + 1;                         // top-right
+      const c = (gy + 1) * gridSize + gx;     // bottom-left
+      const d = c + 1;                         // bottom-right
+
+      if (arachneOptimize) {
+        const zA = positions[a * 3 + 2];
+        const zB = positions[b * 3 + 2];
+        const zC = positions[c * 3 + 2];
+        const zD = positions[d * 3 + 2];
+        // Compare diagonals: A-D vs B-C — split along the shorter Z difference
+        // Winding: CCW when viewed from +Z (front face)
+        const diagAD = Math.abs(zA - zD);
+        const diagBC = Math.abs(zB - zC);
+        if (diagAD <= diagBC) {
+          indices.push(a, d, b, a, c, d);
+        } else {
+          indices.push(a, c, b, b, c, d);
+        }
+      } else {
+        // Default: consistent split (CCW winding)
+        indices.push(a, d, b, a, c, d);
+      }
+    }
+  }
+
+  const plane = new THREE.BufferGeometry();
+  plane.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  plane.setIndex(indices);
 
   // Step C: Bottom cap — CircleGeometry at Z=0, facing -Z
-  const bottomCap = new THREE.CircleGeometry(radiusMm, Math.max(64, segments));
+  const capSegments = Math.min(Math.max(64, meshSegments), 128);
+  const bottomCap = new THREE.CircleGeometry(radiusMm, capSegments);
   // Flip normals to face downward
   const bottomPos = bottomCap.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < bottomPos.count; i++) {
@@ -158,9 +246,11 @@ export function generateLithopaneMesh(
 
   const geometries: THREE.BufferGeometry[] = [plane, bottomCap];
 
-  // Generate notches — placed intelligently near thicker rim areas
+  // Generate notch geometry separately so it can be toggled in preview
+  let notchGeometry: THREE.BufferGeometry | null = null;
   if (numNotches > 0 && notchRadiusMm > 0) {
     const notchAngles = computeNotchAngles(heightmap, resolution, numNotches);
+    const notchParts: THREE.BufferGeometry[] = [];
     for (const angle of notchAngles) {
       const notch = createSemicircularNotch(
         radiusMm,
@@ -170,20 +260,33 @@ export function generateLithopaneMesh(
       );
       notch.deleteAttribute('uv');
       notch.deleteAttribute('normal');
-      geometries.push(notch);
+      notchParts.push(notch);
+    }
+    const mergedNotchesRaw = mergeGeometries(notchParts, false);
+    for (const g of notchParts) g.dispose();
+    if (mergedNotchesRaw) {
+      const mergedNotches = mergeVertices(mergedNotchesRaw, 0.01);
+      mergedNotchesRaw.dispose();
+      mergedNotches.computeVertexNormals();
+      notchGeometry = mergedNotches;
     }
   }
 
   // All geometries now have only 'position' attribute and are indexed.
   // mergeGeometries can merge indexed geometries directly — no need for
   // toNonIndexed() which inflates vertex count ~6x and makes mergeVertices slow.
-  let merged = mergeGeometries(geometries, false);
-  if (!merged) throw new Error('Failed to merge geometries');
+  const mergedRaw = mergeGeometries(geometries, false);
+  // Dispose all input geometries — their data has been copied into mergedRaw
+  for (const g of geometries) g.dispose();
+  if (!mergedRaw) throw new Error('Failed to merge geometries');
 
-  merged = mergeVertices(merged, 0.01); // tolerance in mm
+  const merged = mergeVertices(mergedRaw, 0.01); // tolerance in mm
+  // Dispose the pre-mergeVertices intermediate
+  mergedRaw.dispose();
+
   merged.computeVertexNormals();
 
-  return merged;
+  return { body: merged, notches: notchGeometry };
 }
 
 /**
@@ -196,7 +299,7 @@ function createSemicircularNotch(
   notchRadius: number,
   height: number
 ): THREE.BufferGeometry {
-  // The notch center sits on the rim, extending outward
+  // Notch center sits on the rim
   const cx = rimRadius * Math.cos(angle);
   const cy = rimRadius * Math.sin(angle);
 
@@ -207,8 +310,21 @@ function createSemicircularNotch(
   // CylinderGeometry is along Y axis; we need it along Z axis
   notch.rotateX(Math.PI / 2);
 
-  // Position: center at rim, shifted outward by half the notch radius so it protrudes
   notch.translate(cx, cy, height / 2);
+
+  // Clip: project any vertices inside the image circle onto the rim
+  // so the notch never intrudes into the image area.
+  const pos = notch.attributes.position as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const dist = Math.sqrt(x * x + y * y);
+    if (dist < rimRadius && dist > 0.001) {
+      pos.setX(i, x * rimRadius / dist);
+      pos.setY(i, y * rimRadius / dist);
+    }
+  }
+  pos.needsUpdate = true;
 
   return notch;
 }

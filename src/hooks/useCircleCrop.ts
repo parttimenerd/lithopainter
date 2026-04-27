@@ -69,6 +69,28 @@ export function useCircleCrop(initial: CropCircle = DEFAULT_CROP) {
     dragging.current = null;
   }, []);
 
+  const resetCrop = useCallback(() => {
+    setCrop(DEFAULT_CROP);
+  }, []);
+
+  const onWheel = useCallback(
+    (deltaY: number, contentW: number, contentH: number) => {
+      const delta = deltaY > 0 ? -0.02 : 0.02;
+      const minDim = Math.min(contentW, contentH);
+      setCrop((prev) => {
+        const newRadius = clamp(prev.radius + delta, 0.05, 0.5);
+        const rFracX = (newRadius * minDim) / contentW;
+        const rFracY = (newRadius * minDim) / contentH;
+        return {
+          cx: clamp(prev.cx, rFracX, 1 - rFracX),
+          cy: clamp(prev.cy, rFracY, 1 - rFracY),
+          radius: newRadius,
+        };
+      });
+    },
+    []
+  );
+
   const extractCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   /**
@@ -78,8 +100,12 @@ export function useCircleCrop(initial: CropCircle = DEFAULT_CROP) {
    */
   const extractCircle = useCallback(
     (source: HTMLCanvasElement | HTMLVideoElement | HTMLImageElement): HTMLCanvasElement => {
-      const sw = source instanceof HTMLVideoElement ? source.videoWidth : source.width;
-      const sh = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
+      const sw = source instanceof HTMLVideoElement ? source.videoWidth
+        : source instanceof HTMLImageElement ? (source.naturalWidth || source.width)
+        : source.width;
+      const sh = source instanceof HTMLVideoElement ? source.videoHeight
+        : source instanceof HTMLImageElement ? (source.naturalHeight || source.height)
+        : source.height;
       const minDim = Math.min(sw, sh);
       const rPx = crop.radius * minDim;
       const cxPx = crop.cx * sw;
@@ -121,5 +147,5 @@ export function useCircleCrop(initial: CropCircle = DEFAULT_CROP) {
     [crop]
   );
 
-  return { crop, setCrop, onPointerDown, onPointerMove, onPointerUp, extractCircle };
+  return { crop, setCrop, resetCrop, onPointerDown, onPointerMove, onPointerUp, onWheel, extractCircle };
 }
