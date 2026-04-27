@@ -1,0 +1,377 @@
+:root {
+  --bg: #1a1a2e;
+  --surface: #16213e;
+  --surface-alt: #0f3460;
+  --text: #e0e0e0;
+  --text-muted: #888;
+  --accent: #e94560;
+  --accent-hover: #ff6b81;
+  --border: #2a2a4a;
+  --radius: 8px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  height: 100vh;
+  gap: 1px;
+  background: var(--border);
+}
+
+/* Left panel: source input */
+.source-panel {
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.source-panel__header {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.source-panel__tab {
+  flex: 1;
+  padding: 10px 16px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: all 0.15s;
+}
+
+.source-panel__tab--active {
+  color: var(--accent);
+  border-bottom: 2px solid var(--accent);
+  background: rgba(233, 69, 96, 0.05);
+}
+
+.source-panel__content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Webcam view wrapper */
+.webcam-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Webcam view */
+.webcam-container {
+  position: relative;
+  flex: 1;
+  min-height: 200px;
+  background: #000;
+  overflow: hidden;
+}
+
+.webcam-container video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.webcam-container__frozen {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* Circle crop overlay */
+.circle-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.circle-overlay svg {
+  width: 100%;
+  height: 100%;
+}
+
+.circle-overlay__handle {
+  pointer-events: all;
+  cursor: grab;
+}
+
+.circle-overlay__handle:active {
+  cursor: grabbing;
+}
+
+.circle-overlay__resize {
+  pointer-events: all;
+  cursor: nwse-resize;
+}
+
+/* Webcam actions */
+.webcam-actions {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+/* Image upload */
+.image-upload {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 200px;
+}
+
+.image-upload__dropzone {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--border);
+  margin: 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 0.15s;
+  position: relative;
+  overflow: hidden;
+}
+
+.image-upload__dropzone--active {
+  border-color: var(--accent);
+  background: rgba(233, 69, 96, 0.05);
+}
+
+.image-upload__dropzone--has-image {
+  border-style: solid;
+  background: #000;
+}
+
+.image-upload__dropzone img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.image-upload__url {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.image-upload__url input {
+  flex: 1;
+}
+
+/* Control panel */
+.control-panel {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+  overflow-y: auto;
+  max-height: 60vh;
+}
+
+.control-panel__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.control-panel__group--full {
+  grid-column: 1 / -1;
+}
+
+.control-panel label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.control-panel input[type="number"],
+.control-panel input[type="range"] {
+  width: 100%;
+}
+
+.control-panel select {
+  width: 100%;
+  padding: 4px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.control-panel select:disabled {
+  opacity: 0.5;
+}
+
+/* Preview panel */
+.preview-panel {
+  background: #000;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-panel__canvas {
+  flex: 1;
+}
+
+.preview-panel__toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  align-items: center;
+}
+
+.preview-panel__status {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.preview-panel__status a {
+  color: var(--text-muted);
+  text-decoration: underline;
+}
+
+.preview-panel__status a:hover {
+  color: var(--text);
+}
+
+/* Shared button styles */
+.btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn--primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn--accent {
+  background: #7c3aed;
+  border-color: #7c3aed;
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn--accent:hover {
+  background: #6d28d9;
+  border-color: #6d28d9;
+}
+
+.btn--sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* Shared input styles */
+input[type="number"] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 4px 6px;
+  font-size: 13px;
+  width: 100%;
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+}
+
+/* Toggle switch */
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.toggle input {
+  width: 36px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+
+/* Progress bar */
+.progress-bar {
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-bar__fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+}
