@@ -183,7 +183,8 @@ export function downsampleToCanvas(
   diameterMm: number,
   nozzleWidthMm: number
 ): HTMLCanvasElement {
-  const res = Math.min(Math.ceil(diameterMm / nozzleWidthMm), 500);
+  // 1.5× sub-nozzle resolution for better detail and path-contiguity analysis
+  const res = Math.min(Math.ceil(diameterMm / nozzleWidthMm * 1.5), 750);
   if (!_downsampleCanvas) _downsampleCanvas = document.createElement('canvas');
   _downsampleCanvas.width = res;
   _downsampleCanvas.height = res;
@@ -769,6 +770,240 @@ export function chamferEdges(
 }
 
 /**
+ * Per-layer path contiguity optimizer for faster printing.
+ *
+ * For each discrete layer height (highest to lowest):
+ * 1. Connected component analysis — find all contiguous regions at this height
+ * 2. Island removal — components below minArea demoted to next layer
+ *    (eliminates travel moves + retractions to tiny isolated features)
+ * 3. Peninsula trimming — 1px protrusions surrounded on 3 sides by lower
+ *    material are demoted (reduces extra perimeter loops)
+ * 4. Gap bridging — pixels between same-height neighbors (cardinal + diagonal)
+ *    are promoted to merge nearby regions into single toolpaths
+ * 5. Majority-vote boundary smoothing — boundary pixels adopt their 3×3
+ *    neighborhood majority, reducing jagged perimeters and direction changes
+ *
+ * All passes are O(width × height × numLayers) — stays real-time.
+ *
+ * minArea: minimum connected component area in pixels to keep.
+ *          Scales with resolution² to stay nozzle-proportional.
+ */
+export function optimizeLayerPaths(
+  heights: Float32Array,
+  width: number,
+  height: number,
+  numLayers: number,
+  layerHeightMm: number,
+  baseLayerHeightMm: number,
+  bgMask?: Uint8Array,
+  minArea = 6,
+  bridging = 1.0,
+  smoothingIters = 2
+): Float32Array {
+  const result = new Float32Array(heights);
+  const numPixels = width * height;
+
+  // Collect all unique discrete layer heights
+  const layerHeightsArr: number[] = [];
+  for (let l = 0; l < numLayers; l++) {
+    layerHeightsArr.push(roundToPrecision(baseLayerHeightMm + l * layerHeightMm, 2));
+  }
+  // Sort descending — process from highest layer down
+  layerHeightsArr.sort((a, b) => b - a);
+
+  // Reusable buffers
+  const visited = new Uint8Array(numPixels);
+  const stack: number[] = [];
+
+  // ── Pass 1–3: Island removal, peninsula trimming, bridging ──
+  for (let li = 0; li < layerHeightsArr.length; li++) {
+    const threshold = layerHeightsArr[li];
+    // Skip the lowest layer — it covers everything inside the circle
+    if (li === layerHeightsArr.length - 1) break;
+    const nextHeight = layerHeightsArr[li + 1];
+
+    // ─ 1. Connected components via flood fill ─
+    visited.fill(0);
+    const componentSizes: number[] = [];
+    const componentPixels: number[][] = [];
+
+    for (let i = 0; i < numPixels; i++) {
+      if (visited[i]) continue;
+      if (bgMask && bgMask[i] === 1) continue;
+      if (result[i] < threshold || result[i] === 0) continue;
+
+      stack.length = 0;
+      stack.push(i);
+      visited[i] = 1;
+      const pixels: number[] = [];
+
+      while (stack.length > 0) {
+        const px = stack.pop()!;
+        pixels.push(px);
+        const x = px % width;
+        const y = (px - x) / width;
+
+        // 4-connected neighbors
+        if (y > 0 && !visited[px - width]) {
+          const ni = px - width;
+          if (!(bgMask && bgMask[ni] === 1) && result[ni] >= threshold && result[ni] > 0) {
+            visited[ni] = 1; stack.push(ni);
+          }
+        }
+        if (y < height - 1 && !visited[px + width]) {
+          const ni = px + width;
+          if (!(bgMask && bgMask[ni] === 1) && result[ni] >= threshold && result[ni] > 0) {
+            visited[ni] = 1; stack.push(ni);
+          }
+        }
+        if (x > 0 && !visited[px - 1]) {
+          const ni = px - 1;
+          if (!(bgMask && bgMask[ni] === 1) && result[ni] >= threshold && result[ni] > 0) {
+            visited[ni] = 1; stack.push(ni);
+          }
+        }
+        if (x < width - 1 && !visited[px + 1]) {
+          const ni = px + 1;
+          if (!(bgMask && bgMask[ni] === 1) && result[ni] >= threshold && result[ni] > 0) {
+            visited[ni] = 1; stack.push(ni);
+          }
+        }
+      }
+
+      componentSizes.push(pixels.length);
+      componentPixels.push(pixels);
+    }
+
+    // ─ 2. Island removal: demote small components ─
+    if (minArea > 0) {
+      for (let c = 0; c < componentSizes.length; c++) {
+        if (componentSizes[c] < minArea) {
+          for (const px of componentPixels[c]) {
+            if (result[px] === threshold) {
+              result[px] = nextHeight;
+            }
+          }
+        }
+      }
+    }
+
+    // ─ 3. Peninsula trimming: remove 1px protrusions ─
+    // A pixel at this threshold with ≤1 cardinal neighbor at the same level
+    // is a thin spur that creates an extra perimeter loop.
+    if (minArea > 0) {
+      for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const idx = y * width + x;
+        if (bgMask && bgMask[idx] === 1) continue;
+        if (result[idx] < threshold) continue;
+
+        let sameCount = 0;
+        if (result[idx - 1] >= threshold) sameCount++;
+        if (result[idx + 1] >= threshold) sameCount++;
+        if (result[idx - width] >= threshold) sameCount++;
+        if (result[idx + width] >= threshold) sameCount++;
+
+        // Isolated spur: only 1 or 0 cardinal neighbors at this level
+        if (sameCount <= 1 && result[idx] === threshold) {
+          result[idx] = nextHeight;
+        }
+      }
+    }
+    } // end minArea > 0
+
+    // ─ 4. Gap bridging: promote pixels between same-layer neighbors ─
+    // Cardinal + diagonal bridging for better connectivity
+    if (bridging > 0) {
+      for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const idx = y * width + x;
+        if (bgMask && bgMask[idx] === 1) continue;
+        if (result[idx] >= threshold) continue;
+        if (result[idx] === 0) continue;
+
+        // Horizontal bridge
+        if (result[idx - 1] >= threshold && result[idx + 1] >= threshold) {
+          result[idx] = threshold;
+          continue;
+        }
+        // Vertical bridge
+        if (result[idx - width] >= threshold && result[idx + width] >= threshold) {
+          result[idx] = threshold;
+          continue;
+        }
+        // Diagonal bridges (NW-SE and NE-SW) — only when bridging >= 0.5
+        if (bridging >= 0.5) {
+          if (result[idx - width - 1] >= threshold && result[idx + width + 1] >= threshold) {
+            result[idx] = threshold;
+            continue;
+          }
+          if (result[idx - width + 1] >= threshold && result[idx + width - 1] >= threshold) {
+            result[idx] = threshold;
+          }
+        }
+      }
+    }
+    } // end bridging > 0
+  }
+
+  // ── Pass 5: Majority-vote boundary smoothing ──
+  // Smooths jagged layer boundaries so the slicer generates simpler perimeters
+  // with fewer direction changes → faster print acceleration/deceleration.
+  // Only boundary pixels (adjacent to a different height) are touched.
+  const numIters = Math.round(smoothingIters);
+  if (numIters > 0) {
+  const scratch = new Float32Array(numPixels);
+  for (let iter = 0; iter < numIters; iter++) {
+    const src = iter === 0 ? result : scratch;
+    const dst = iter === 0 ? scratch : result;
+    dst.set(src);
+
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const idx = y * width + x;
+        if (bgMask && bgMask[idx] === 1) continue;
+        const h = src[idx];
+        if (h === 0) continue;
+
+        // Check if this is a boundary pixel
+        const up = src[idx - width];
+        const dn = src[idx + width];
+        const lt = src[idx - 1];
+        const rt = src[idx + 1];
+        if (up === h && dn === h && lt === h && rt === h) continue; // interior
+
+        // Count votes in 3×3 neighborhood (weighted: cardinal=2, diagonal=1)
+        const votes = new Map<number, number>();
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const ni = (y + dy) * width + (x + dx);
+            const nh = src[ni];
+            if (nh === 0) continue;
+            if (bgMask && bgMask[ni] === 1) continue;
+            const w = (dx === 0 || dy === 0) ? 2 : 1;
+            votes.set(nh, (votes.get(nh) || 0) + w);
+          }
+        }
+
+        // Pick the height with the most votes
+        let bestH = h;
+        let bestVotes = 0;
+        for (const [vh, vcount] of votes) {
+          if (vcount > bestVotes) {
+            bestVotes = vcount;
+            bestH = vh;
+          }
+        }
+        dst[idx] = bestH;
+      }
+    }
+  }
+  } // end smoothing
+
+  return result;
+}
+
+/**
  * Apply a circular mask to the heightmap, zeroing pixels outside the inscribed circle.
  * These vertices will be "folded" to the rim during mesh generation.
  * When feather > 0, smoothly blend heights near the circle edge toward
@@ -1123,6 +1358,9 @@ export function processImage(
   autoThresholds = true,
   reserveLayerForBg = true,
   arachneOptimize = false,
+  pathMinIsland = 6,
+  pathBridging = 1.0,
+  pathSmoothing = 2,
   textMask?: Uint8Array | null
 ): { heightmap: Float32Array; resolution: number; computedThresholds?: number[] } {
   // Mirror the source canvas if requested (horizontal flip for face-down printing)
@@ -1191,6 +1429,10 @@ export function processImage(
     default:
       heights = bayerDither(blurred, res, res, numLayers, layerHeightMm, baseLayerHeightMm, bgMask, dithering, thresholds, reserveLayerForBg);
       break;
+  }
+  // 9b. Per-layer path contiguity: remove isolated islands and bridge gaps
+  if (pathMinIsland > 0 || pathBridging > 0 || pathSmoothing > 0) {
+    heights = optimizeLayerPaths(heights, res, res, numLayers, layerHeightMm, baseLayerHeightMm, bgMask, pathMinIsland, pathBridging, pathSmoothing);
   }
   applyCircularMask(heights, res, res, edgeFeather, baseLayerHeightMm);
 

@@ -67,6 +67,7 @@ export default function SourcePanel({
             continuousMode={config.continuousMode}
             backgroundRemoval={config.backgroundRemoval}
             autoRemoveBgOnFreeze={config.autoRemoveBgOnFreeze}
+            trackBothFaces={config.trackBothFaces}
           />
         ) : (
           <ImageUpload

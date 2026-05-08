@@ -11,6 +11,9 @@ const LOCAL_BASE_URL = import.meta.env.BASE_URL + 'models';
 // Serialize session creation so base URL mutations don't race
 let sessionChain = Promise.resolve<unknown>(undefined);
 
+// Mutex per model: only one inference at a time per session
+const inferenceQueue = new Map<string, Promise<unknown>>();
+
 /** Lazily create and cache a session for the given model name. */
 function getSession(modelName: string): Promise<Session> {
   let promise = sessionCache.get(modelName);
@@ -31,6 +34,7 @@ function getSession(modelName: string): Promise<Session> {
 /**
  * Remove background from a canvas using @bunnio/rembg-web.
  * Supports multiple models: u2netp, u2net, isnet_general_use, isnet_anime, silueta, u2net_human_seg.
+ * Serializes inference calls per session to avoid "session already in use" errors.
  */
 export async function removeBackgroundOptimized(
   sourceCanvas: HTMLCanvasElement,
@@ -38,12 +42,22 @@ export async function removeBackgroundOptimized(
   modelName: string = 'u2netp'
 ): Promise<HTMLCanvasElement> {
   const session = await getSession(modelName);
-  const options: RemoveOptions = {
-    session,
-    postProcessMask: true,
-    onProgress: onProgress
-      ? (info) => onProgress(info.progress / 100)
-      : undefined,
-  };
-  return removeToCanvas(sourceCanvas, options);
+
+  // Wait for any in-flight inference on this session to finish
+  const prev = inferenceQueue.get(modelName) ?? Promise.resolve();
+  const task = prev.then(async () => {
+    const options: RemoveOptions = {
+      session,
+      postProcessMask: true,
+      onProgress: onProgress
+        ? (info) => onProgress(info.progress / 100)
+        : undefined,
+    };
+    return removeToCanvas(sourceCanvas, options);
+  });
+
+  // Store the tail of the queue (swallow errors so the queue doesn't jam)
+  inferenceQueue.set(modelName, task.then(() => {}, () => {}));
+
+  return task;
 }

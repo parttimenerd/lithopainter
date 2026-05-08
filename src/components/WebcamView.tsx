@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, type PointerEvent as ReactPointerEvent } from 'react';
 import { useWebcam } from '../hooks/useWebcam';
 import { useCircleCrop } from '../hooks/useCircleCrop';
-import { detectFace, preloadFaceDetector } from '../processing/faceDetection';
+import { detectFace, detectFaces, encompassFaces, preloadFaceDetector } from '../processing/faceDetection';
 import CircleCropOverlay from './CircleCropOverlay';
 
 interface Props {
@@ -15,6 +15,7 @@ interface Props {
   continuousMode: boolean;
   backgroundRemoval: boolean;
   autoRemoveBgOnFreeze: boolean;
+  trackBothFaces: boolean;
 }
 
 export default function WebcamView({
@@ -28,6 +29,7 @@ export default function WebcamView({
   continuousMode,
   backgroundRemoval,
   autoRemoveBgOnFreeze,
+  trackBothFaces,
 }: Props) {
   const { videoRef, active, error, start, stop, captureFrame } = useWebcam();
   const frozenCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -138,9 +140,13 @@ export default function WebcamView({
       // Use frozen canvas if frozen, otherwise capture a live frame
       const source = frozen ? frozenCanvasRef.current : captureFrame();
       if (!source) return;
-      const face = await detectFace(source);
-      if (face) {
-        crop.setCrop({ cx: face.cx, cy: face.cy, radius: face.radius });
+      if (trackBothFaces) {
+        const faces = await detectFaces(source);
+        const combined = encompassFaces(faces, videoAR);
+        if (combined) crop.setCrop({ cx: combined.cx, cy: combined.cy, radius: combined.radius });
+      } else {
+        const face = await detectFace(source);
+        if (face) crop.setCrop({ cx: face.cx, cy: face.cy, radius: face.radius });
       }
     } finally {
       setDetectingFace(false);
@@ -152,6 +158,8 @@ export default function WebcamView({
   setCropRef.current = crop.setCrop;
   const videoARRef = useRef(videoAR);
   videoARRef.current = videoAR;
+  const trackBothRef = useRef(trackBothFaces);
+  trackBothRef.current = trackBothFaces;
 
   // Auto face tracking loop — runs alongside the live frame loop
   useEffect(() => {
@@ -165,17 +173,26 @@ export default function WebcamView({
         try {
           const frame = captureFrame();
           if (frame) {
-            const face = await detectFace(frame);
-            if (face && running) {
+            const both = trackBothRef.current;
+            const faces = await detectFaces(frame);
+            let target: { cx: number; cy: number; radius: number } | null = null;
+
+            if (both && faces.length > 1) {
+              target = encompassFaces(faces, videoARRef.current || 1);
+            } else if (faces.length > 0) {
+              // Pick the largest face
+              target = faces[0];
+            }
+
+            if (target && running) {
               const mode = faceTrackModeRef.current;
               setCropRef.current((prev) => {
                 const ar = videoARRef.current || 1;
-                const r = mode === 'resize' ? face.radius : prev.radius;
+                const r = mode === 'resize' ? target!.radius : prev.radius;
                 const rFracX = r / Math.max(ar, 1);
                 const rFracY = r * Math.min(ar, 1);
-                const nx = Math.min(Math.max(face.cx, rFracX), 1 - rFracX);
-                const ny = Math.min(Math.max(face.cy, rFracY), 1 - rFracY);
-                // Skip update if nothing changed (avoids unnecessary re-renders)
+                const nx = Math.min(Math.max(target!.cx, rFracX), 1 - rFracX);
+                const ny = Math.min(Math.max(target!.cy, rFracY), 1 - rFracY);
                 if (Math.abs(prev.cx - nx) < 0.002 &&
                     Math.abs(prev.cy - ny) < 0.002 &&
                     Math.abs(prev.radius - r) < 0.002) {

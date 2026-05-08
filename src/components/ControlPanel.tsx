@@ -67,7 +67,7 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
 
   const resetBg = () => onChange({ ...config,
     bgModel: D.bgModel, reserveLayerForBg: D.reserveLayerForBg,
-    autoRemoveBgOnFreeze: D.autoRemoveBgOnFreeze,
+    autoRemoveBgOnFreeze: D.autoRemoveBgOnFreeze, trackBothFaces: D.trackBothFaces,
   });
 
   const resetPrint = () => onChange({ ...config,
@@ -75,6 +75,7 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
     numLayers: D.numLayers, layerHeightMm: D.layerHeightMm,
     baseLayerHeightMm: D.baseLayerHeightMm, lightIntensity: D.lightIntensity,
     absorptionCoefficient: D.absorptionCoefficient, arachneOptimize: D.arachneOptimize,
+    pathMinIsland: D.pathMinIsland, pathBridging: D.pathBridging, pathSmoothing: D.pathSmoothing,
   });
 
   const resetNotches = () => onChange({ ...config,
@@ -185,6 +186,7 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
         <div className="control-section__toggles">
           <label className="toggle"><input type="checkbox" checked={config.reserveLayerForBg} onChange={(e) => set('reserveLayerForBg', e.target.checked)} /> Reserve lowest layer for BG</label>
           <label className="toggle"><input type="checkbox" checked={config.autoRemoveBgOnFreeze} onChange={(e) => set('autoRemoveBgOnFreeze', e.target.checked)} /> Auto remove BG on freeze</label>
+          <label className="toggle"><input type="checkbox" checked={config.trackBothFaces} onChange={(e) => set('trackBothFaces', e.target.checked)} /> Track both faces</label>
         </div>
       </Section>
 
@@ -225,6 +227,20 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
         </div>
         <div className="control-section__toggles">
           <label className="toggle"><input type="checkbox" checked={config.arachneOptimize} onChange={(e) => set('arachneOptimize', e.target.checked)} /> Optimize for Arachne</label>
+        </div>
+        <div className="control-section__grid">
+          <div className="control-panel__group">
+            <label>Min Island: {config.pathMinIsland}</label>
+            <input id="slider-min-island" type="range" min={0} max={20} step={1} value={config.pathMinIsland} onChange={(e) => set('pathMinIsland', +e.target.value)} />
+          </div>
+          <div className="control-panel__group">
+            <label>Bridging: {config.pathBridging.toFixed(2)}</label>
+            <input id="slider-bridging" type="range" min={0} max={1} step={0.05} value={config.pathBridging} onChange={(e) => set('pathBridging', +e.target.value)} />
+          </div>
+          <div className="control-panel__group control-panel__group--full">
+            <label>Path Smoothing: {config.pathSmoothing}</label>
+            <input id="slider-path-smooth" type="range" min={0} max={4} step={1} value={config.pathSmoothing} onChange={(e) => set('pathSmoothing', +e.target.value)} />
+          </div>
         </div>
       </Section>
 

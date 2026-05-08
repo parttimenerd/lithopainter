@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { roundToPrecision } from '../utils/mathUtils';
+import type { VectorLayer } from '../types';
 
 /**
  * Generate a watertight circular lithopane BufferGeometry using the "folding plane" topology.
@@ -327,4 +328,293 @@ function createSemicircularNotch(
   pos.needsUpdate = true;
 
   return notch;
+}
+
+/**
+ * Generate a lithopane mesh directly from vector contours (no pixel grid).
+ *
+ * Each layer's contours become exact triangle edges — the mesh follows the
+ * smooth Bezier curves rather than being constrained to a raster grid.
+ *
+ * Approach:
+ * 1. Build the circular disc base as a flat shape at baseHeight
+ * 2. For each vector layer, create THREE.Shape from contours and triangulate
+ *    at the layer's height using ShapeGeometry (earcut triangulation)
+ * 3. Build vertical walls between layer terraces
+ * 4. Add bottom cap
+ * 5. Merge everything into a watertight manifold
+ */
+export function generateVectorLithopaneMesh(
+  vectorLayers: VectorLayer[],
+  diameterMm: number,
+  baseLayerHeightMm: number,
+  numNotches: number,
+  notchRadiusMm: number,
+  notchHeightMm: number,
+  heightmap: Float32Array,
+  resolution: number
+): LithopaneGeometry {
+  const radiusMm = diameterMm / 2;
+  const baseHeight = baseLayerHeightMm;
+  const geometries: THREE.BufferGeometry[] = [];
+
+  // Sort layers from lowest to highest
+  const sortedLayers = [...vectorLayers].sort((a, b) => a.heightMm - b.heightMm);
+
+  // Step 1: Base disc (full circle at base height)
+  const circleSegments = 128;
+  const baseShape = new THREE.Shape();
+  for (let i = 0; i <= circleSegments; i++) {
+    const angle = (i / circleSegments) * Math.PI * 2;
+    const x = radiusMm * Math.cos(angle);
+    const y = radiusMm * Math.sin(angle);
+    if (i === 0) baseShape.moveTo(x, y);
+    else baseShape.lineTo(x, y);
+  }
+
+  // Punch the lowest layer's contours as holes in the base
+  // (those areas will be filled at a higher Z by the layer geometry)
+  if (sortedLayers.length > 0) {
+    const lowestLayer = sortedLayers[0];
+    for (const contour of lowestLayer.contours) {
+      if (contour.area > 0 && contour.points.length >= 3) {
+        const hole = new THREE.Path();
+        hole.moveTo(contour.points[0].x, contour.points[0].y);
+        for (let i = 1; i < contour.points.length; i++) {
+          hole.lineTo(contour.points[i].x, contour.points[i].y);
+        }
+        hole.closePath();
+        baseShape.holes.push(hole);
+      }
+    }
+  }
+
+  const baseGeo = new THREE.ShapeGeometry(baseShape);
+  // Set Z to baseHeight for all vertices
+  const basePos = baseGeo.attributes.position as THREE.BufferAttribute;
+  for (let i = 0; i < basePos.count; i++) {
+    basePos.setZ(i, baseHeight);
+  }
+  baseGeo.deleteAttribute('uv');
+  baseGeo.deleteAttribute('normal');
+  geometries.push(baseGeo);
+
+  // Step 2: For each layer, create shapes from its outer contours
+  // and punch holes from the next higher layer
+  for (let li = 0; li < sortedLayers.length; li++) {
+    const layer = sortedLayers[li];
+    const nextLayer = li < sortedLayers.length - 1 ? sortedLayers[li + 1] : null;
+
+    // Separate outers (CCW, area > 0) and holes (CW, area < 0) at this level
+    const outers = layer.contours.filter(c => c.area > 0);
+    const holes = layer.contours.filter(c => c.area < 0);
+
+    for (const outer of outers) {
+      if (outer.points.length < 3) continue;
+
+      const shape = new THREE.Shape();
+      shape.moveTo(outer.points[0].x, outer.points[0].y);
+      for (let i = 1; i < outer.points.length; i++) {
+        shape.lineTo(outer.points[i].x, outer.points[i].y);
+      }
+      shape.closePath();
+
+      // Add CW holes from THIS layer (islands within the contour)
+      for (const h of holes) {
+        if (h.points.length < 3) continue;
+        if (isPointInPolygon(h.points[0], outer.points)) {
+          const holePath = new THREE.Path();
+          holePath.moveTo(h.points[0].x, h.points[0].y);
+          for (let i = 1; i < h.points.length; i++) {
+            holePath.lineTo(h.points[i].x, h.points[i].y);
+          }
+          holePath.closePath();
+          shape.holes.push(holePath);
+        }
+      }
+
+      // Punch next-higher layer's outers as holes (those regions will be at a higher Z)
+      if (nextLayer) {
+        for (const nextOuter of nextLayer.contours) {
+          if (nextOuter.area <= 0 || nextOuter.points.length < 3) continue;
+          if (isPointInPolygon(nextOuter.points[0], outer.points)) {
+            const holePath = new THREE.Path();
+            holePath.moveTo(nextOuter.points[0].x, nextOuter.points[0].y);
+            for (let i = 1; i < nextOuter.points.length; i++) {
+              holePath.lineTo(nextOuter.points[i].x, nextOuter.points[i].y);
+            }
+            holePath.closePath();
+            shape.holes.push(holePath);
+          }
+        }
+      }
+
+      // Triangulate this terrace
+      const layerGeo = new THREE.ShapeGeometry(shape);
+      const layerPos = layerGeo.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < layerPos.count; i++) {
+        layerPos.setZ(i, layer.heightMm);
+      }
+      layerGeo.deleteAttribute('uv');
+      layerGeo.deleteAttribute('normal');
+      geometries.push(layerGeo);
+    }
+
+    // Step 3: Build vertical walls from this layer's contours
+    // (connects the terrace at this height to the terrace below)
+    const wallHeight = li === 0
+      ? layer.heightMm - baseHeight
+      : layer.heightMm - sortedLayers[li - 1].heightMm;
+
+    if (wallHeight > 0.001) {
+      const lowerZ = layer.heightMm - wallHeight;
+      for (const contour of layer.contours) {
+        if (contour.area <= 0) continue; // only build walls for outer contours
+        const wallGeo = buildWallStrip(contour.points, lowerZ, layer.heightMm);
+        if (wallGeo) {
+          geometries.push(wallGeo);
+        }
+      }
+      // Also build walls for holes (inner walls face inward)
+      for (const contour of layer.contours) {
+        if (contour.area >= 0) continue;
+        const wallGeo = buildWallStrip(contour.points, lowerZ, layer.heightMm, true);
+        if (wallGeo) {
+          geometries.push(wallGeo);
+        }
+      }
+    }
+  }
+
+  // Step 4: Outer rim wall (circle from Z=0 to Z=baseHeight)
+  const rimPoints: { x: number; y: number }[] = [];
+  for (let i = 0; i < circleSegments; i++) {
+    const angle = (i / circleSegments) * Math.PI * 2;
+    rimPoints.push({ x: radiusMm * Math.cos(angle), y: radiusMm * Math.sin(angle) });
+  }
+  const rimWall = buildWallStrip(rimPoints, 0, baseHeight);
+  if (rimWall) geometries.push(rimWall);
+
+  // Step 5: Bottom cap at Z=0
+  const bottomCap = new THREE.CircleGeometry(radiusMm, circleSegments);
+  const bottomPos = bottomCap.attributes.position as THREE.BufferAttribute;
+  for (let i = 0; i < bottomPos.count; i++) {
+    bottomPos.setZ(i, 0);
+  }
+  // Flip faces for downward-facing normals
+  const bottomIndex = bottomCap.index!;
+  const idxArr = bottomIndex.array as Uint16Array | Uint32Array;
+  for (let i = 0; i < idxArr.length; i += 3) {
+    const tmp = idxArr[i];
+    idxArr[i] = idxArr[i + 2];
+    idxArr[i + 2] = tmp;
+  }
+  bottomIndex.needsUpdate = true;
+  bottomCap.deleteAttribute('uv');
+  bottomCap.deleteAttribute('normal');
+  geometries.push(bottomCap);
+
+  // Step 6: Merge into manifold
+  const mergedRaw = mergeGeometries(geometries, false);
+  for (const g of geometries) g.dispose();
+  if (!mergedRaw) throw new Error('Failed to merge vector geometries');
+
+  const merged = mergeVertices(mergedRaw, 0.01);
+  mergedRaw.dispose();
+  merged.computeVertexNormals();
+
+  // Notch geometry (same as raster path)
+  let notchGeometry: THREE.BufferGeometry | null = null;
+  if (numNotches > 0 && notchRadiusMm > 0) {
+    const notchAngles = computeNotchAngles(heightmap, resolution, numNotches);
+    const notchParts: THREE.BufferGeometry[] = [];
+    for (const angle of notchAngles) {
+      const notch = createSemicircularNotch(radiusMm, angle, notchRadiusMm, notchHeightMm);
+      notch.deleteAttribute('uv');
+      notch.deleteAttribute('normal');
+      notchParts.push(notch);
+    }
+    const mergedNotchesRaw = mergeGeometries(notchParts, false);
+    for (const g of notchParts) g.dispose();
+    if (mergedNotchesRaw) {
+      const mergedNotches = mergeVertices(mergedNotchesRaw, 0.01);
+      mergedNotchesRaw.dispose();
+      mergedNotches.computeVertexNormals();
+      notchGeometry = mergedNotches;
+    }
+  }
+
+  return { body: merged, notches: notchGeometry };
+}
+
+/**
+ * Build a vertical wall strip from a closed contour between zBottom and zTop.
+ * Creates a triangle strip connecting the contour at two heights.
+ */
+function buildWallStrip(
+  points: { x: number; y: number }[],
+  zBottom: number,
+  zTop: number,
+  flipNormals = false
+): THREE.BufferGeometry | null {
+  const n = points.length;
+  if (n < 3) return null;
+
+  // 2 triangles per segment, 3 vertices per triangle
+  const positions = new Float32Array(n * 6 * 3); // n segments × 2 tris × 3 verts × 3 coords
+  const indices: number[] = [];
+  const verts = new Float32Array((n + 1) * 2 * 3); // (n+1) unique positions × 2 heights
+
+  // Build vertex array: bottom ring then top ring
+  for (let i = 0; i <= n; i++) {
+    const idx = i % n;
+    const vi = i * 3;
+    verts[vi] = points[idx].x;
+    verts[vi + 1] = points[idx].y;
+    verts[vi + 2] = zBottom;
+
+    const ti = (n + 1 + i) * 3;
+    verts[ti] = points[idx].x;
+    verts[ti + 1] = points[idx].y;
+    verts[ti + 2] = zTop;
+  }
+
+  // Build index buffer
+  for (let i = 0; i < n; i++) {
+    const bl = i;           // bottom-left
+    const br = i + 1;       // bottom-right
+    const tl = n + 1 + i;   // top-left
+    const tr = n + 1 + i + 1; // top-right
+
+    if (flipNormals) {
+      indices.push(bl, tl, br, br, tl, tr);
+    } else {
+      indices.push(bl, br, tl, br, tr, tl);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  geo.setIndex(indices);
+  return geo;
+}
+
+/**
+ * Point-in-polygon test (ray casting).
+ */
+function isPointInPolygon(
+  point: { x: number; y: number },
+  polygon: { x: number; y: number }[]
+): boolean {
+  let inside = false;
+  const n = polygon.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = polygon[i].x, yi = polygon[i].y;
+    const xj = polygon[j].x, yj = polygon[j].y;
+    if (((yi > point.y) !== (yj > point.y)) &&
+        (point.x < (xj - xi) * (point.y - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }

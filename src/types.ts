@@ -12,6 +12,7 @@ export interface LithopaneConfig {
   notchHeightMm: number;
   backgroundRemoval: boolean;
   autoRemoveBgOnFreeze: boolean; // auto-run BG removal when freezing webcam frame
+  trackBothFaces: boolean;         // when tracking, fit crop around both faces instead of just the largest
   bgModel: 'u2netp' | 'u2net' | 'isnet_general_use' | 'isnet_anime' | 'silueta' | 'u2net_human_seg';
   continuousMode: boolean;
   brightness: number; // -1 to 1, default 0
@@ -32,6 +33,9 @@ export interface LithopaneConfig {
   lightIntensity: number;       // 0.5 to 5.0, default 1.0 — controls brightness of backlight simulation
   absorptionCoefficient: number; // 1 to 20 mm⁻¹, default 8.0 — Lambert-Beer μ for white PLA
   arachneOptimize: boolean;       // optimize mesh for Arachne wall generator (morphological closing, chamfered Z-steps, 0.1mm grid)
+  pathMinIsland: number;           // 0 to 20, minimum island size in pixels to keep (0 = off)
+  pathBridging: number;            // 0 to 1, gap bridging aggressiveness (0 = off, 1 = cardinal + diagonal)
+  pathSmoothing: number;           // 0 to 4, boundary smoothing iterations (0 = off)
   showHeightmap: boolean;          // show 2D heightmap/heatmap preview instead of 3D
   engravingEnabled: boolean;       // enable text engraving around the rim
   engravingText: string;           // text to engrave around the rim
@@ -52,6 +56,7 @@ export const DEFAULT_CONFIG: LithopaneConfig = {
   notchHeightMm: 3,
   backgroundRemoval: false,
   autoRemoveBgOnFreeze: true,
+  trackBothFaces: false,
   bgModel: 'u2net_human_seg',
   continuousMode: true,
   brightness: 0,
@@ -72,6 +77,9 @@ export const DEFAULT_CONFIG: LithopaneConfig = {
   lightIntensity: 1.0,
   absorptionCoefficient: 8.0,
   arachneOptimize: false,
+  pathMinIsland: 6,
+  pathBridging: 1.0,
+  pathSmoothing: 2,
   showHeightmap: false,
   engravingEnabled: false,
   engravingText: '',
@@ -101,5 +109,27 @@ export interface ProcessingState {
   status: 'idle' | 'processing' | 'removing-bg' | 'generating-mesh' | 'done' | 'error';
   progress: number; // 0–1
   error?: string;
+}
+
+/**
+ * A single contour path in mm coordinates (origin at center of disc).
+ * Points are densely sampled from Bezier curves — they define the exact
+ * boundary at sub-pixel accuracy.
+ */
+export interface VectorContour {
+  points: { x: number; y: number }[];
+  /** Signed area in mm² (positive = CCW outer, negative = CW hole) */
+  area: number;
+}
+
+/**
+ * All contours for a single height layer.
+ * These define the regions that should be at this height.
+ */
+export interface VectorLayer {
+  /** Physical height in mm for this layer */
+  heightMm: number;
+  /** Contours defining the filled regions at this height */
+  contours: VectorContour[];
 }
 

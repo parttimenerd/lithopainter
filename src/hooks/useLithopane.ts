@@ -64,6 +64,9 @@ export function useLithopane(
         config.autoThresholds,
         config.reserveLayerForBg,
         config.arachneOptimize,
+        config.pathMinIsland,
+        config.pathBridging,
+        config.pathSmoothing,
         textMask
       );
     },
