@@ -46,11 +46,13 @@ export default function PreviewPanel({
 
   return (
     <div className="preview-panel">
-      {showHeightmap && heightmapData ? (
-        <HeightmapPreview heightmap={heightmapData.heightmap} resolution={heightmapData.resolution} heatmap={true} />
-      ) : (
-        <LithopaneScene lithoGeo={lithoGeo} maxThickness={maxThickness} baseLayerHeightMm={baseLayerHeightMm} layerHeightMm={layerHeightMm} lightIntensity={lightIntensity} absorptionCoefficient={absorptionCoefficient} showNotches={showNotches} />
-      )}
+      <div className={`preview-panel__scene${processingState.status !== 'idle' && processingState.status !== 'done' && processingState.status !== 'error' ? ' preview-panel__scene--processing' : ''}`}>
+        {showHeightmap && heightmapData ? (
+          <HeightmapPreview heightmap={heightmapData.heightmap} resolution={heightmapData.resolution} heatmap={true} />
+        ) : (
+          <LithopaneScene lithoGeo={lithoGeo} maxThickness={maxThickness} baseLayerHeightMm={baseLayerHeightMm} layerHeightMm={layerHeightMm} lightIntensity={lightIntensity} absorptionCoefficient={absorptionCoefficient} showNotches={showNotches} />
+        )}
+      </div>
 
       {processingState.status !== 'idle' && processingState.status !== 'done' &&
         !(processingState.status === 'error' && errorDismissed) && (

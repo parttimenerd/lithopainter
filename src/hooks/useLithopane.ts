@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { processImage } from '../processing/imageProcessor';
+import { vectorizeImage, type VectorizationParams } from '../processing/vectorize';
 import { removeBackgroundOptimized } from '../processing/backgroundRemoval';
 import { createTextMask, applyTextMask } from '../processing/engravingStamp';
 import { generateLithopaneMesh, type LithopaneGeometry } from '../three/LithopaneMesh';
@@ -67,7 +68,9 @@ export function useLithopane(
         config.pathMinIsland,
         config.pathBridging,
         config.pathSmoothing,
-        textMask
+        config.edgeDilation,
+        textMask,
+        config.renderResolution
       );
     },
     [config]
@@ -101,10 +104,47 @@ export function useLithopane(
   buildMeshRef.current = buildMesh;
 
   /** Run processing with engraving: create text mask first so dithering
-   *  skips text pixels, then stamp letter heights after quantisation. */
+   *  skips text pixels, then stamp letter heights after quantisation.
+   *  When vectorizeEnabled is true, uses the vector pipeline instead. */
   const runWithEngraving = useCallback(
     (source: HTMLCanvasElement | HTMLImageElement) => {
       const cfg = configRef.current;
+
+      // Vectorization path — bypass dithering entirely
+      if (cfg.vectorizeEnabled) {
+        const effectiveBase = cfg.baseLayerHeightMm > 0 ? cfg.baseLayerHeightMm : cfg.layerHeightMm;
+        const vParams: VectorizationParams = {
+          numLayers: cfg.numLayers,
+          layerHeightMm: cfg.layerHeightMm,
+          baseLayerHeightMm: effectiveBase,
+          diameterMm: cfg.diameterMm,
+          nozzleWidthMm: cfg.nozzleWidthMm,
+          smoothing: cfg.vectorSmoothing,
+          minFeatureSize: cfg.vectorMinFeature,
+          outputResolution: cfg.vectorResolution,
+          fillRegions: cfg.vectorFillRegions,
+          thresholds: cfg.layerThresholds,
+          autoThresholds: cfg.autoThresholds,
+          edgeFeather: cfg.edgeFeather,
+          mirror: cfg.mirror,
+          brightness: cfg.brightness,
+          contrast: cfg.contrast,
+          gamma: cfg.gamma,
+          shadows: cfg.shadows,
+          highlights: cfg.highlights,
+          localContrast: cfg.localContrast,
+          edgeEnhance: cfg.edgeEnhance,
+          autoLevels: cfg.autoLevels,
+        };
+        const result = vectorizeImage(source, vParams);
+        return {
+          heightmap: result.heightmap,
+          resolution: result.resolution,
+          computedThresholds: result.computedThresholds,
+        };
+      }
+
+      // Standard dithering path
       // Phase 1: build text mask (if engraving enabled) BEFORE dithering
       let textMask: Uint8Array | null = null;
       if (cfg.engravingEnabled && cfg.engravingText) {
@@ -155,6 +195,14 @@ export function useLithopane(
 
       // Wait for any in-flight regenerate to notice it's cancelled
       busyRef.current = false;
+
+      // Clear stale geometry immediately so the old mesh never lingers
+      setGeometry((prev) => {
+        prev?.body.dispose();
+        prev?.notches?.dispose();
+        return null;
+      });
+      setHeightmapData(null);
 
       try {
         let processedSource: HTMLCanvasElement | HTMLImageElement = sourceCanvas;
@@ -253,6 +301,15 @@ export function useLithopane(
 
     pendingRef.current = false;
     busyRef.current = true;
+
+    // Clear stale geometry immediately so the old mesh never lingers
+    setGeometry((prev) => {
+      prev?.body.dispose();
+      prev?.notches?.dispose();
+      return null;
+    });
+    setHeightmapData(null);
+
     const doWork = () => {
       const genId = processingRef.current;
       setProcessing({ status: 'processing', progress: 0.5 });
@@ -307,6 +364,14 @@ export function useLithopane(
       if (pendingRef.current) {
         pendingRef.current = false;
         regenerate();
+      } else {
+        // No pending work — if the current genId was cancelled,
+        // reset processing state so the UI doesn't stay stuck.
+        setProcessing((prev) =>
+          prev.status !== 'done' && prev.status !== 'idle' && prev.status !== 'error'
+            ? { status: 'idle', progress: 0 }
+            : prev
+        );
       }
     };
 

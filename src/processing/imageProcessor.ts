@@ -181,10 +181,11 @@ let _mirrorCanvas: HTMLCanvasElement | null = null;
 export function downsampleToCanvas(
   source: HTMLCanvasElement | HTMLImageElement,
   diameterMm: number,
-  nozzleWidthMm: number
+  nozzleWidthMm: number,
+  resolutionMultiplier = 1
 ): HTMLCanvasElement {
   // 1.5× sub-nozzle resolution for better detail and path-contiguity analysis
-  const res = Math.min(Math.ceil(diameterMm / nozzleWidthMm * 1.5), 750);
+  const res = Math.min(Math.ceil(diameterMm / nozzleWidthMm * 1.5 * resolutionMultiplier), 1500);
   if (!_downsampleCanvas) _downsampleCanvas = document.createElement('canvas');
   _downsampleCanvas.width = res;
   _downsampleCanvas.height = res;
@@ -1004,6 +1005,185 @@ export function optimizeLayerPaths(
 }
 
 /**
+ * Enforce minimum line width on a layered heightmap.
+ * For each discrete layer, applies morphological opening (erode → dilate)
+ * which removes features thinner than the structuring element radius.
+ * Remaining features are guaranteed to be at least `minWidthPx` wide.
+ */
+export function enforceMinLineWidth(
+  heights: Float32Array,
+  width: number,
+  height: number,
+  numLayers: number,
+  layerHeightMm: number,
+  baseLayerHeightMm: number,
+  minWidthPx: number,
+  bgMask?: Uint8Array
+): Float32Array {
+  // Skip only if resolution is too low to meaningfully distinguish sub-nozzle features
+  if (minWidthPx < 1.2) return heights;
+  const result = new Float32Array(heights);
+  const numPixels = width * height;
+  const radius = Math.max(1, Math.round(minWidthPx / 2));
+
+  // Build precomputed disk offsets
+  const offsets: number[] = []; // flat array of [dy*width + dx] deltas
+  const offsetsDx: number[] = [];
+  const offsetsDy: number[] = [];
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (dx * dx + dy * dy <= radius * radius) {
+        offsets.push(dy * width + dx);
+        offsetsDx.push(dx);
+        offsetsDy.push(dy);
+      }
+    }
+  }
+  const nOffsets = offsets.length;
+
+  // Process each layer from highest to lowest
+  const mask = new Uint8Array(numPixels);
+  const eroded = new Uint8Array(numPixels);
+  const dilated = new Uint8Array(numPixels);
+
+  for (let l = numLayers - 1; l >= 1; l--) {
+    const threshold = roundToPrecision(baseLayerHeightMm + l * layerHeightMm, 2);
+
+    // Create binary mask: 1 where height >= threshold
+    for (let i = 0; i < numPixels; i++) {
+      mask[i] = (result[i] >= threshold && !(bgMask && bgMask[i] === 1)) ? 1 : 0;
+    }
+
+    // Erode: pixel is 1 only if ALL neighbors in disk are 1
+    eroded.fill(0);
+    for (let y = radius; y < height - radius; y++) {
+      const rowStart = y * width;
+      for (let x = radius; x < width - radius; x++) {
+        const idx = rowStart + x;
+        if (!mask[idx]) continue;
+        let allSet = true;
+        for (let k = 0; k < nOffsets; k++) {
+          if (!mask[idx + offsets[k]]) {
+            allSet = false;
+            break;
+          }
+        }
+        if (allSet) eroded[idx] = 1;
+      }
+    }
+
+    // Dilate eroded result: pixel is 1 if ANY neighbor in disk is 1
+    // Allow output into border zone (dilation expands outward)
+    dilated.fill(0);
+    for (let y = radius; y < height - radius; y++) {
+      const rowStart = y * width;
+      for (let x = radius; x < width - radius; x++) {
+        const idx = rowStart + x;
+        if (!eroded[idx]) continue;
+        for (let k = 0; k < nOffsets; k++) {
+          const ny = y + offsetsDy[k];
+          const nx = x + offsetsDx[k];
+          if (ny >= 0 && ny < height && nx >= 0 && nx < width) {
+            dilated[ny * width + nx] = 1;
+          }
+        }
+      }
+    }
+
+    // Apply: remove pixels that were in the original mask but NOT in opened result
+    for (let i = 0; i < numPixels; i++) {
+      if (mask[i] && !dilated[i]) {
+        // This pixel was too thin — demote to next layer down
+        const nextH = l > 1 ? roundToPrecision(baseLayerHeightMm + (l - 1) * layerHeightMm, 2) : baseLayerHeightMm;
+        // Use epsilon comparison to handle floating-point quantization
+        if (result[i] >= threshold - 0.001 && result[i] < threshold + layerHeightMm - 0.001) {
+          result[i] = nextH;
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Dilate edges: for each layer, find boundary pixels and expand them outward
+ * by a fraction of nozzle width. This thickens thin features to be printable
+ * without removing them.
+ * `amount` is in nozzle-width units (e.g. 0.5 = half nozzle dilation).
+ */
+export function dilateEdges(
+  heights: Float32Array,
+  width: number,
+  height: number,
+  numLayers: number,
+  layerHeightMm: number,
+  baseLayerHeightMm: number,
+  nozzleWidthPx: number,
+  amount: number,
+  bgMask?: Uint8Array
+): Float32Array {
+  const result = new Float32Array(heights);
+  const numPixels = width * height;
+  const dilateRadius = Math.max(1, Math.round(nozzleWidthPx * amount / 2));
+
+  // Build precomputed disk offsets
+  const offsets: number[] = [];
+  for (let dy = -dilateRadius; dy <= dilateRadius; dy++) {
+    for (let dx = -dilateRadius; dx <= dilateRadius; dx++) {
+      if (dx * dx + dy * dy <= dilateRadius * dilateRadius) {
+        offsets.push(dy * width + dx);
+      }
+    }
+  }
+  const nOffsets = offsets.length;
+
+  // Process each layer from highest to lowest
+  const mask = new Uint8Array(numPixels);
+  const boundary = new Uint8Array(numPixels);
+
+  for (let l = numLayers - 1; l >= 1; l--) {
+    const threshold = roundToPrecision(baseLayerHeightMm + l * layerHeightMm, 2);
+
+    // Create binary mask: 1 where height >= threshold
+    for (let i = 0; i < numPixels; i++) {
+      mask[i] = (result[i] >= threshold - 0.001 && !(bgMask && bgMask[i] === 1)) ? 1 : 0;
+    }
+
+    // Find boundary pixels: pixels in mask that have at least one non-mask neighbor
+    boundary.fill(0);
+    for (let y = 1; y < height - 1; y++) {
+      const row = y * width;
+      for (let x = 1; x < width - 1; x++) {
+        const idx = row + x;
+        if (!mask[idx]) continue;
+        if (!mask[idx - 1] || !mask[idx + 1] || !mask[idx - width] || !mask[idx + width]) {
+          boundary[idx] = 1;
+        }
+      }
+    }
+
+    // Dilate from boundary pixels outward
+    for (let y = dilateRadius; y < height - dilateRadius; y++) {
+      const row = y * width;
+      for (let x = dilateRadius; x < width - dilateRadius; x++) {
+        const idx = row + x;
+        if (!boundary[idx]) continue;
+        for (let k = 0; k < nOffsets; k++) {
+          const ni = idx + offsets[k];
+          if (bgMask && bgMask[ni] === 1) continue;
+          if (result[ni] < threshold - 0.001) {
+            result[ni] = threshold;
+          }
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
  * Apply a circular mask to the heightmap, zeroing pixels outside the inscribed circle.
  * These vertices will be "folded" to the rim during mesh generation.
  * When feather > 0, smoothly blend heights near the circle edge toward
@@ -1358,15 +1538,17 @@ export function processImage(
   autoThresholds = true,
   reserveLayerForBg = true,
   arachneOptimize = false,
-  pathMinIsland = 6,
+  pathMinIsland = 1.5,
   pathBridging = 1.0,
   pathSmoothing = 2,
-  textMask?: Uint8Array | null
+  edgeDilation = 0.5,
+  textMask?: Uint8Array | null,
+  renderResolution = 1
 ): { heightmap: Float32Array; resolution: number; computedThresholds?: number[] } {
   // Mirror the source canvas if requested (horizontal flip for face-down printing)
   const actualSource = mirror ? mirrorCanvas(source) : source;
 
-  const downsampled = downsampleToCanvas(actualSource, diameterMm, nozzleWidthMm);
+  const downsampled = downsampleToCanvas(actualSource, diameterMm, nozzleWidthMm, renderResolution);
   const res = downsampled.width;
   const { lum: grayscale, bgMask: rawBgMask } = toGrayscale(downsampled);
 
@@ -1431,8 +1613,16 @@ export function processImage(
       break;
   }
   // 9b. Per-layer path contiguity: remove isolated islands and bridge gaps
-  if (pathMinIsland > 0 || pathBridging > 0 || pathSmoothing > 0) {
-    heights = optimizeLayerPaths(heights, res, res, numLayers, layerHeightMm, baseLayerHeightMm, bgMask, pathMinIsland, pathBridging, pathSmoothing);
+  // pathMinIsland is in nozzle-width units — convert to pixel area
+  const nozzleWidthPx = nozzleWidthMm * res / diameterMm;
+  const minIslandRadiusPx = pathMinIsland * nozzleWidthPx / 2;
+  const minIslandAreaPx = Math.ceil(Math.PI * minIslandRadiusPx * minIslandRadiusPx);
+  if (minIslandAreaPx > 0 || pathBridging > 0 || pathSmoothing > 0) {
+    heights = optimizeLayerPaths(heights, res, res, numLayers, layerHeightMm, baseLayerHeightMm, bgMask, minIslandAreaPx, pathBridging, pathSmoothing);
+  }
+  // 9c. Dilate thin edges — thicken features that are thinner than nozzle width
+  if (edgeDilation > 0) {
+    heights = dilateEdges(heights, res, res, numLayers, layerHeightMm, baseLayerHeightMm, nozzleWidthPx, edgeDilation, bgMask);
   }
   applyCircularMask(heights, res, res, edgeFeather, baseLayerHeightMm);
 

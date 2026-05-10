@@ -341,6 +341,17 @@ html, body, #root {
   flex: 1;
 }
 
+.preview-panel__scene {
+  flex: 1;
+  display: flex;
+  transition: opacity 0.25s ease;
+}
+
+.preview-panel__scene--processing {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
 .preview-panel__toolbar {
   display: flex;
   gap: 8px;

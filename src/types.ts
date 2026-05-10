@@ -33,15 +33,23 @@ export interface LithopaneConfig {
   lightIntensity: number;       // 0.5 to 5.0, default 1.0 — controls brightness of backlight simulation
   absorptionCoefficient: number; // 1 to 20 mm⁻¹, default 8.0 — Lambert-Beer μ for white PLA
   arachneOptimize: boolean;       // optimize mesh for Arachne wall generator (morphological closing, chamfered Z-steps, 0.1mm grid)
-  pathMinIsland: number;           // 0 to 20, minimum island size in pixels to keep (0 = off)
+  pathMinIsland: number;           // 0 to 5, minimum island size in nozzle widths (area = circle of this diameter)
   pathBridging: number;            // 0 to 1, gap bridging aggressiveness (0 = off, 1 = cardinal + diagonal)
   pathSmoothing: number;           // 0 to 4, boundary smoothing iterations (0 = off)
+  edgeDilation: number;            // 0 to 2, dilate thin edges by this many nozzle widths
   showHeightmap: boolean;          // show 2D heightmap/heatmap preview instead of 3D
   engravingEnabled: boolean;       // enable text engraving around the rim
   engravingText: string;           // text to engrave around the rim
   engravingFontSize: number;       // font size in mm for rim engraving
   engravingAngle: number;          // starting angle in degrees for text placement
   engravingLayers: number;         // number of extra layers for the engraving band (1-3)
+  renderResolution: number;        // 1 to 4, output resolution multiplier for non-vector mode
+  // Vectorization mode
+  vectorizeEnabled: boolean;       // use vector-based edge tracing instead of dithering
+  vectorSmoothing: number;         // 0 to 5, Chaikin smoothing iterations for contours
+  vectorMinFeature: number;        // 0.5 to 5, minimum feature size in nozzle widths
+  vectorResolution: number;        // 1 to 8, output resolution multiplier
+  vectorFillRegions: boolean;      // fill enclosed areas as solid polygons (vs stroke edges only)
 }
 
 export const DEFAULT_CONFIG: LithopaneConfig = {
@@ -77,15 +85,22 @@ export const DEFAULT_CONFIG: LithopaneConfig = {
   lightIntensity: 1.0,
   absorptionCoefficient: 8.0,
   arachneOptimize: false,
-  pathMinIsland: 6,
+  pathMinIsland: 1.5,
   pathBridging: 1.0,
   pathSmoothing: 2,
+  edgeDilation: 0.5,
   showHeightmap: false,
   engravingEnabled: false,
   engravingText: '',
   engravingFontSize: 3,
   engravingAngle: 0,
   engravingLayers: 1,
+  renderResolution: 1,
+  vectorizeEnabled: false,
+  vectorSmoothing: 2,
+  vectorMinFeature: 1.5,
+  vectorResolution: 4,
+  vectorFillRegions: true,
 };
 
 export interface CropCircle {

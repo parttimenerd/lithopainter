@@ -76,6 +76,7 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
     baseLayerHeightMm: D.baseLayerHeightMm, lightIntensity: D.lightIntensity,
     absorptionCoefficient: D.absorptionCoefficient, arachneOptimize: D.arachneOptimize,
     pathMinIsland: D.pathMinIsland, pathBridging: D.pathBridging, pathSmoothing: D.pathSmoothing,
+    edgeDilation: D.edgeDilation, renderResolution: D.renderResolution,
   });
 
   const resetNotches = () => onChange({ ...config,
@@ -230,16 +231,24 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
         </div>
         <div className="control-section__grid">
           <div className="control-panel__group">
-            <label>Min Island: {config.pathMinIsland}</label>
-            <input id="slider-min-island" type="range" min={0} max={20} step={1} value={config.pathMinIsland} onChange={(e) => set('pathMinIsland', +e.target.value)} />
+            <label>Min Island: {config.pathMinIsland.toFixed(1)}×</label>
+            <input id="slider-min-island" type="range" min={0} max={5} step={0.5} value={config.pathMinIsland} onChange={(e) => set('pathMinIsland', +e.target.value)} />
           </div>
           <div className="control-panel__group">
             <label>Bridging: {config.pathBridging.toFixed(2)}</label>
             <input id="slider-bridging" type="range" min={0} max={1} step={0.05} value={config.pathBridging} onChange={(e) => set('pathBridging', +e.target.value)} />
           </div>
+          <div className="control-panel__group">
+            <label>Edge Dilation: {config.edgeDilation.toFixed(1)}×</label>
+            <input type="range" min={0} max={2} step={0.1} value={config.edgeDilation} onChange={(e) => set('edgeDilation', +e.target.value)} />
+          </div>
           <div className="control-panel__group control-panel__group--full">
             <label>Path Smoothing: {config.pathSmoothing}</label>
             <input id="slider-path-smooth" type="range" min={0} max={4} step={1} value={config.pathSmoothing} onChange={(e) => set('pathSmoothing', +e.target.value)} />
+          </div>
+          <div className="control-panel__group control-panel__group--full">
+            <label>Render Resolution: {config.renderResolution}×</label>
+            <input type="range" min={1} max={4} step={0.5} value={config.renderResolution} onChange={(e) => set('renderResolution', +e.target.value)} />
           </div>
         </div>
       </Section>
@@ -275,6 +284,33 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
             diameterMm={config.diameterMm}
             onChange={(updates) => onChange({ ...config, ...updates })}
           />
+        )}
+      </Section>
+
+      <Section title="Vectorization" defaultOpen={false} onReset={() => onChange({ ...config, vectorizeEnabled: D.vectorizeEnabled, vectorSmoothing: D.vectorSmoothing, vectorMinFeature: D.vectorMinFeature, vectorResolution: D.vectorResolution, vectorFillRegions: D.vectorFillRegions })}>
+        <div className="control-section__toggles">
+          <label className="toggle"><input type="checkbox" checked={config.vectorizeEnabled} onChange={(e) => set('vectorizeEnabled', e.target.checked)} /> Enable Vectorization</label>
+        </div>
+        {config.vectorizeEnabled && (
+          <>
+          <div className="control-section__toggles">
+            <label className="toggle"><input type="checkbox" checked={config.vectorFillRegions} onChange={(e) => set('vectorFillRegions', e.target.checked)} /> Fill Enclosed Regions</label>
+          </div>
+          <div className="control-section__grid">
+            <div className="control-panel__group">
+              <label>Smoothing: {config.vectorSmoothing.toFixed(1)}</label>
+              <input type="range" min={0} max={5} step={0.5} value={config.vectorSmoothing} onChange={(e) => set('vectorSmoothing', +e.target.value)} />
+            </div>
+            <div className="control-panel__group">
+              <label>Min Feature: {config.vectorMinFeature.toFixed(1)}× nozzle</label>
+              <input type="range" min={0.5} max={5} step={0.25} value={config.vectorMinFeature} onChange={(e) => set('vectorMinFeature', +e.target.value)} />
+            </div>
+            <div className="control-panel__group control-panel__group--full">
+              <label>Output Resolution: {config.vectorResolution}×</label>
+              <input type="range" min={1} max={8} step={0.5} value={config.vectorResolution} onChange={(e) => set('vectorResolution', +e.target.value)} />
+            </div>
+          </div>
+          </>
         )}
       </Section>
 

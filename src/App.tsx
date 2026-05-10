@@ -115,7 +115,14 @@ export default function App() {
       prev.engravingText !== config.engravingText ||
       prev.engravingFontSize !== config.engravingFontSize ||
       prev.engravingAngle !== config.engravingAngle ||
-      prev.engravingLayers !== config.engravingLayers);
+      prev.engravingLayers !== config.engravingLayers ||
+      prev.vectorizeEnabled !== config.vectorizeEnabled ||
+      prev.vectorSmoothing !== config.vectorSmoothing ||
+      prev.vectorMinFeature !== config.vectorMinFeature ||
+      prev.vectorResolution !== config.vectorResolution ||
+      prev.vectorFillRegions !== config.vectorFillRegions ||
+      prev.renderResolution !== config.renderResolution ||
+      prev.edgeDilation !== config.edgeDilation);
     // BG removal toggled on, or model changed while BG removal is enabled
     const needsBgRerun = hasOriginalSource && (
       (prev.bgModel !== config.bgModel && config.backgroundRemoval) ||
