@@ -36,6 +36,10 @@ function loadConfig(): LithopaneConfig {
           }
         }
       }
+      // Clamp diameter to allowed range
+      if (typeof merged.diameterMm === 'number') {
+        merged.diameterMm = Math.max(5, Math.min(200, merged.diameterMm));
+      }
       // Validate layerThresholds — must be an array of numbers
       if (!Array.isArray(merged.layerThresholds) || !merged.layerThresholds.every((v: unknown) => typeof v === 'number')) {
         merged.layerThresholds = [];
@@ -111,11 +115,6 @@ export default function App() {
       prev.autoThresholds !== config.autoThresholds ||
       prev.reserveLayerForBg !== config.reserveLayerForBg ||
       prev.arachneOptimize !== config.arachneOptimize ||
-      prev.engravingEnabled !== config.engravingEnabled ||
-      prev.engravingText !== config.engravingText ||
-      prev.engravingFontSize !== config.engravingFontSize ||
-      prev.engravingAngle !== config.engravingAngle ||
-      prev.engravingLayers !== config.engravingLayers ||
       prev.vectorizeEnabled !== config.vectorizeEnabled ||
       prev.vectorSmoothing !== config.vectorSmoothing ||
       prev.vectorMinFeature !== config.vectorMinFeature ||
@@ -284,39 +283,39 @@ export default function App() {
 
   return (
     <div className="app" ref={appRef} style={{ gridTemplateColumns: `${leftWidth}% 6px 1fr` }}>
-      <SourcePanel
-        mode={mode}
-        setMode={setMode}
-        config={config}
-        setConfig={handleSetConfig}
-        crop={crop}
-        onFrame={handleFrame}
-        onCapture={handleCapture}
-        onCaptureWithBg={handleCaptureWithBg}
-        onCropChange={recrop}
-        onClear={reset}
-        frozen={frozen}
-        setFrozen={setFrozen}
-        computedThresholds={computedThresholds}
-      />
-      <div
-        className="resize-handle"
-        onPointerDown={onDividerPointerDown}
-        onPointerMove={onDividerPointerMove}
-        onPointerUp={onDividerPointerUp}
-      />
-      <PreviewPanel
-        lithoGeo={lithoGeo}
-        maxThickness={maxThickness}
-        baseLayerHeightMm={config.baseLayerHeightMm > 0 ? config.baseLayerHeightMm : config.layerHeightMm}
-        layerHeightMm={config.layerHeightMm}
-        lightIntensity={config.lightIntensity}
-        absorptionCoefficient={config.absorptionCoefficient}
-        processingState={processing}
-        showHeightmap={config.showHeightmap}
-        heightmapData={heightmapData}
-        onExport={handleExport}
-      />
+        <SourcePanel
+          mode={mode}
+          setMode={setMode}
+          config={config}
+          setConfig={handleSetConfig}
+          crop={crop}
+          onFrame={handleFrame}
+          onCapture={handleCapture}
+          onCaptureWithBg={handleCaptureWithBg}
+          onCropChange={recrop}
+          onClear={reset}
+          frozen={frozen}
+          setFrozen={setFrozen}
+          computedThresholds={computedThresholds}
+        />
+        <div
+          className="resize-handle"
+          onPointerDown={onDividerPointerDown}
+          onPointerMove={onDividerPointerMove}
+          onPointerUp={onDividerPointerUp}
+        />
+        <PreviewPanel
+          lithoGeo={lithoGeo}
+          maxThickness={maxThickness}
+          baseLayerHeightMm={config.baseLayerHeightMm > 0 ? config.baseLayerHeightMm : config.layerHeightMm}
+          layerHeightMm={config.layerHeightMm}
+          lightIntensity={config.lightIntensity}
+          absorptionCoefficient={config.absorptionCoefficient}
+          processingState={processing}
+          showHeightmap={config.showHeightmap}
+          heightmapData={heightmapData}
+          onExport={handleExport}
+        />
     </div>
   );
 }

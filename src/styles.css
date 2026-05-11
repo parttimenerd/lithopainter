@@ -280,6 +280,12 @@ html, body, #root {
   padding: 6px 12px 12px;
 }
 
+.control-section__actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 .control-section__grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -453,6 +459,8 @@ html, body, #root {
   background: #047857;
   border-color: #047857;
 }
+
+
 
 /* Shared input styles */
 input[type="number"] {
@@ -661,39 +669,4 @@ input[type="range"]:focus-visible {
 
 .heightmap-preview__gradient--heatmap {
   background: linear-gradient(to right, #000, #1e0064, #5000b4, #b400c8, #e63c3c, #ffa000, #ffe632, #fff);
-}
-
-/* Engraving editor */
-.engraving-editor {
-  margin-top: 8px;
-}
-
-.engraving-editor__preview {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 8px;
-}
-
-.engraving-editor__canvas {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  cursor: crosshair;
-  max-width: 100%;
-}
-
-.engraving-editor__controls {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px 14px;
-}
-
-.engraving-editor__input {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  padding: 4px 6px;
-  font-size: 13px;
-  width: 100%;
 }

@@ -48,9 +48,10 @@ export interface FaceBounds {
  * Returns null if no face is found.
  */
 export async function detectFace(
-  source: HTMLCanvasElement | HTMLVideoElement | HTMLImageElement
+  source: HTMLCanvasElement | HTMLVideoElement | HTMLImageElement,
+  scale = 1.3
 ): Promise<FaceBounds | null> {
-  const faces = await detectFaces(source);
+  const faces = await detectFaces(source, scale);
   if (faces.length === 0) return null;
   // Return the largest (most prominent) face
   return faces.reduce((a, b) => b.radius > a.radius ? b : a);
@@ -59,9 +60,11 @@ export async function detectFace(
 /**
  * Detect all faces in a canvas and return crop circle coords for each,
  * sorted by size (largest first).
+ * @param scale — multiplier for face-to-circle size (default 1.3)
  */
 export async function detectFaces(
-  source: HTMLCanvasElement | HTMLVideoElement | HTMLImageElement
+  source: HTMLCanvasElement | HTMLVideoElement | HTMLImageElement,
+  scale = 1.3
 ): Promise<FaceBounds[]> {
   const det = await getDetector();
 
@@ -93,7 +96,7 @@ export async function detectFaces(
     const faceCx = (bb.originX + bb.width / 2) / sw;
     const faceCy = (bb.originY + bb.height * 0.4) / sh;
     const faceSize = Math.max(bb.width, bb.height);
-    const radius = Math.min(Math.max((faceSize / minDim) * 1.3, 0.15), 0.5);
+    const radius = Math.min(Math.max((faceSize / minDim) * scale, 0.15), 0.5);
 
     const rFracX = (radius * minDim) / sw;
     const rFracY = (radius * minDim) / sh;

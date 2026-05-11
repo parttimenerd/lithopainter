@@ -1542,7 +1542,6 @@ export function processImage(
   pathBridging = 1.0,
   pathSmoothing = 2,
   edgeDilation = 0.5,
-  textMask?: Uint8Array | null,
   renderResolution = 1
 ): { heightmap: Float32Array; resolution: number; computedThresholds?: number[] } {
   // Mirror the source canvas if requested (horizontal flip for face-down printing)
@@ -1552,16 +1551,7 @@ export function processImage(
   const res = downsampled.width;
   const { lum: grayscale, bgMask: rawBgMask } = toGrayscale(downsampled);
 
-  // Merge textMask into bgMask so dithering functions treat text pixels
-  // like background (skip them). This avoids wasted computation and
-  // prevents error-diffusion from leaking through text areas.
-  let bgMask = rawBgMask;
-  if (textMask && textMask.length === res * res) {
-    bgMask = new Uint8Array(rawBgMask);
-    for (let i = 0; i < bgMask.length; i++) {
-      if (textMask[i] === 1) bgMask[i] = 1;
-    }
-  }
+  const bgMask = rawBgMask;
 
   // 1. Auto-levels first (stretch histogram before other adjustments)
   let processed = autoLevels ? applyAutoLevels(grayscale) : grayscale;

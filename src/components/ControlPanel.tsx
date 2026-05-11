@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import type { LithopaneConfig } from '../types';
 import { DEFAULT_CONFIG } from '../types';
+
 import ThresholdEditor from './ThresholdEditor';
-import EngravingEditor from './EngravingEditor';
 
 interface Props {
   config: LithopaneConfig;
@@ -44,11 +44,17 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
   };
 
   /** Safe numeric setter — ignores NaN from empty/invalid inputs. */
-  const setNum = (key: keyof LithopaneConfig, raw: string, min?: number) => {
-    const v = +raw;
+  const setNum = (key: keyof LithopaneConfig, raw: string, min?: number, max?: number) => {
+    let v = +raw;
     if (!Number.isFinite(v)) return;
-    set(key, min != null ? Math.max(v, min) : v);
+    if (min != null) v = Math.max(v, min);
+    if (max != null) v = Math.min(v, max);
+    set(key, v);
   };
+
+  const lbl = (_key: keyof LithopaneConfig, text: string) => (
+    <label>{text}</label>
+  );
 
   const D = DEFAULT_CONFIG;
 
@@ -68,6 +74,7 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
   const resetBg = () => onChange({ ...config,
     bgModel: D.bgModel, reserveLayerForBg: D.reserveLayerForBg,
     autoRemoveBgOnFreeze: D.autoRemoveBgOnFreeze, trackBothFaces: D.trackBothFaces,
+    faceCircleScale: D.faceCircleScale,
   });
 
   const resetPrint = () => onChange({ ...config,
@@ -85,49 +92,47 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
 
   const resetExpert = () => onChange({ ...config,
     showHeightmap: D.showHeightmap,
-    engravingEnabled: D.engravingEnabled,
-    engravingText: D.engravingText, engravingFontSize: D.engravingFontSize,
-    engravingAngle: D.engravingAngle, engravingLayers: D.engravingLayers,
   });
 
   return (
     <div className="control-panel">
       <Section title="Image Adjustments" onReset={resetImageAdj}>
+
         <div className="control-section__grid">
           <div className="control-panel__group">
-            <label>Brightness: {config.brightness > 0 ? '+' : ''}{config.brightness.toFixed(2)}</label>
+            {lbl('brightness', `Brightness: ${config.brightness > 0 ? '+' : ''}${config.brightness.toFixed(2)}`)}
             <input id="slider-brightness" type="range" min={-1} max={1} step={0.05} value={config.brightness} onChange={(e) => set('brightness', +e.target.value)} />
           </div>
           <div className="control-panel__group">
-            <label>Contrast: {config.contrast > 0 ? '+' : ''}{config.contrast.toFixed(2)}</label>
+            {lbl('contrast', `Contrast: ${config.contrast > 0 ? '+' : ''}${config.contrast.toFixed(2)}`)}
             <input id="slider-contrast" type="range" min={-1} max={1} step={0.05} value={config.contrast} onChange={(e) => set('contrast', +e.target.value)} />
           </div>
           <div className="control-panel__group">
-            <label>Gamma: {config.gamma.toFixed(2)}</label>
+            {lbl('gamma', `Gamma: ${config.gamma.toFixed(2)}`)}
             <input id="slider-gamma" type="range" min={0.2} max={5.0} step={0.05} value={config.gamma} onChange={(e) => set('gamma', +e.target.value)} />
           </div>
           <div className="control-panel__group">
-            <label>Shadows: {config.shadows > 0 ? '+' : ''}{config.shadows.toFixed(2)}</label>
+            {lbl('shadows', `Shadows: ${config.shadows > 0 ? '+' : ''}${config.shadows.toFixed(2)}`)}
             <input id="slider-shadows" type="range" min={-1} max={1} step={0.05} value={config.shadows} onChange={(e) => set('shadows', +e.target.value)} />
           </div>
           <div className="control-panel__group">
-            <label>Highlights: {config.highlights > 0 ? '+' : ''}{config.highlights.toFixed(2)}</label>
+            {lbl('highlights', `Highlights: ${config.highlights > 0 ? '+' : ''}${config.highlights.toFixed(2)}`)}
             <input id="slider-highlights" type="range" min={-1} max={1} step={0.05} value={config.highlights} onChange={(e) => set('highlights', +e.target.value)} />
           </div>
           <div className="control-panel__group">
-            <label>Edge Enhance: {config.edgeEnhance.toFixed(1)}</label>
+            {lbl('edgeEnhance', `Edge Enhance: ${config.edgeEnhance.toFixed(1)}`)}
             <input id="slider-edge" type="range" min={0} max={10} step={0.1} value={config.edgeEnhance} onChange={(e) => set('edgeEnhance', +e.target.value)} />
           </div>
           <div className="control-panel__group">
-            <label>Local Contrast: {config.localContrast.toFixed(1)}</label>
+            {lbl('localContrast', `Local Contrast: ${config.localContrast.toFixed(1)}`)}
             <input id="slider-local" type="range" min={0} max={2} step={0.1} value={config.localContrast} onChange={(e) => set('localContrast', +e.target.value)} />
           </div>
           <div className="control-panel__group">
-            <label>Edge Feather: {config.edgeFeather.toFixed(2)}</label>
+            {lbl('edgeFeather', `Edge Feather: ${config.edgeFeather.toFixed(2)}`)}
             <input id="slider-feather" type="range" min={0} max={0.5} step={0.01} value={config.edgeFeather} onChange={(e) => set('edgeFeather', +e.target.value)} />
           </div>
           <div className="control-panel__group">
-            <label>Dither Method</label>
+            {lbl('ditherMethod', 'Dither Method')}
             <select value={config.ditherMethod} onChange={(e) => set('ditherMethod', e.target.value as LithopaneConfig['ditherMethod'])}>
               <option value="bayer">Bayer (Ordered)</option>
               <option value="blue-noise">Blue Noise</option>
@@ -139,11 +144,11 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
             </select>
           </div>
           <div className="control-panel__group">
-            <label>Dithering: {config.dithering.toFixed(2)}</label>
+            {lbl('dithering', `Dithering: ${config.dithering.toFixed(2)}`)}
             <input id="slider-dithering" type="range" min={0} max={1} step={0.05} value={config.dithering} onChange={(e) => set('dithering', +e.target.value)} disabled={config.ditherMethod === 'none'} />
           </div>
           <div className="control-panel__group">
-            <label>Adaptive: {config.adaptiveSegmentation.toFixed(2)}</label>
+            {lbl('adaptiveSegmentation', `Adaptive: ${config.adaptiveSegmentation.toFixed(2)}`)}
             <input id="slider-adaptive" type="range" min={0} max={1} step={0.05} value={config.adaptiveSegmentation} onChange={(e) => set('adaptiveSegmentation', +e.target.value)} />
           </div>
         </div>
@@ -187,7 +192,13 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
         <div className="control-section__toggles">
           <label className="toggle"><input type="checkbox" checked={config.reserveLayerForBg} onChange={(e) => set('reserveLayerForBg', e.target.checked)} /> Reserve lowest layer for BG</label>
           <label className="toggle"><input type="checkbox" checked={config.autoRemoveBgOnFreeze} onChange={(e) => set('autoRemoveBgOnFreeze', e.target.checked)} /> Auto remove BG on freeze</label>
-          <label className="toggle"><input type="checkbox" checked={config.trackBothFaces} onChange={(e) => set('trackBothFaces', e.target.checked)} /> Track both faces</label>
+          <label className="toggle"><input type="checkbox" checked={config.trackBothFaces} onChange={(e) => set('trackBothFaces', e.target.checked)} /> Track all faces</label>
+        </div>
+        <div className="control-section__grid">
+          <div className="control-panel__group control-panel__group--full">
+            <label>Face Circle Scale: {config.faceCircleScale.toFixed(1)}×</label>
+            <input type="range" min={0.8} max={3.0} step={0.1} value={config.faceCircleScale} onChange={(e) => set('faceCircleScale', +e.target.value)} />
+          </div>
         </div>
       </Section>
 
@@ -195,14 +206,14 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
         <div className="control-section__grid">
           <div className="control-panel__group">
             <label>Diameter (mm)</label>
-            <input type="number" min={10} max={200} step={5} value={config.diameterMm} onChange={(e) => setNum('diameterMm', e.target.value, 5)} />
+            <input type="number" min={10} max={200} step={5} value={config.diameterMm} onChange={(e) => setNum('diameterMm', e.target.value, 5, 200)} />
           </div>
           <div className="control-panel__group">
             <label>Nozzle (mm)</label>
             <input type="number" min={0.2} max={1.0} step={0.1} value={config.nozzleWidthMm} onChange={(e) => setNum('nozzleWidthMm', e.target.value, 0.1)} />
           </div>
           <div className="control-panel__group">
-            <label>Layers: {config.numLayers}</label>
+            {lbl('numLayers', `Layers: ${config.numLayers}`)}
             <input id="slider-layers" type="range" min={1} max={8} value={config.numLayers} onChange={(e) => {
               const n = +e.target.value;
               // Reset custom thresholds when layer count changes (different number of cutpoints)
@@ -239,7 +250,7 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
             <input id="slider-bridging" type="range" min={0} max={1} step={0.05} value={config.pathBridging} onChange={(e) => set('pathBridging', +e.target.value)} />
           </div>
           <div className="control-panel__group">
-            <label>Edge Dilation: {config.edgeDilation.toFixed(1)}×</label>
+            {lbl('edgeDilation', `Edge Dilation: ${config.edgeDilation.toFixed(1)}×`)}
             <input type="range" min={0} max={2} step={0.1} value={config.edgeDilation} onChange={(e) => set('edgeDilation', +e.target.value)} />
           </div>
           <div className="control-panel__group control-panel__group--full">
@@ -273,18 +284,7 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
       <Section title="Expert Options" defaultOpen={false} onReset={resetExpert}>
         <div className="control-section__toggles">
           <label className="toggle"><input type="checkbox" checked={config.showHeightmap} onChange={(e) => set('showHeightmap', e.target.checked)} /> Show Heightmap</label>
-          <label className="toggle"><input type="checkbox" checked={config.engravingEnabled} onChange={(e) => set('engravingEnabled', e.target.checked)} /> Rim Engraving</label>
         </div>
-        {config.engravingEnabled && (
-          <EngravingEditor
-            text={config.engravingText}
-            fontSize={config.engravingFontSize}
-            angle={config.engravingAngle}
-            layers={config.engravingLayers}
-            diameterMm={config.diameterMm}
-            onChange={(updates) => onChange({ ...config, ...updates })}
-          />
-        )}
       </Section>
 
       <Section title="Vectorization" defaultOpen={false} onReset={() => onChange({ ...config, vectorizeEnabled: D.vectorizeEnabled, vectorSmoothing: D.vectorSmoothing, vectorMinFeature: D.vectorMinFeature, vectorResolution: D.vectorResolution, vectorFillRegions: D.vectorFillRegions })}>

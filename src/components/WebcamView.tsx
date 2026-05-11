@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, type PointerEvent as ReactPointerEvent } from 'react';
 import { useWebcam } from '../hooks/useWebcam';
 import { useCircleCrop } from '../hooks/useCircleCrop';
-import { detectFace, detectFaces, encompassFaces, preloadFaceDetector } from '../processing/faceDetection';
+import { detectFaces, encompassFaces, preloadFaceDetector, type FaceBounds } from '../processing/faceDetection';
 import CircleCropOverlay from './CircleCropOverlay';
 
 interface Props {
@@ -16,6 +16,7 @@ interface Props {
   backgroundRemoval: boolean;
   autoRemoveBgOnFreeze: boolean;
   trackBothFaces: boolean;
+  faceCircleScale: number;
 }
 
 export default function WebcamView({
@@ -30,6 +31,7 @@ export default function WebcamView({
   backgroundRemoval,
   autoRemoveBgOnFreeze,
   trackBothFaces,
+  faceCircleScale,
 }: Props) {
   const { videoRef, active, error, start, stop, captureFrame } = useWebcam();
   const frozenCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -38,6 +40,7 @@ export default function WebcamView({
   const containerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
   const [videoAR, setVideoAR] = useState(16 / 9);
+  const [detectedFaces, setDetectedFaces] = useState<FaceBounds[]>([]);
 
   // Track video aspect ratio
   useEffect(() => {
@@ -125,6 +128,7 @@ export default function WebcamView({
     frozenCanvasRef.current = null;
     setFrozenDataUrl(null);
     setFrozen(false);
+    setDetectedFaces([]);
   };
 
   const [detectingFace, setDetectingFace] = useState(false);
@@ -140,14 +144,11 @@ export default function WebcamView({
       // Use frozen canvas if frozen, otherwise capture a live frame
       const source = frozen ? frozenCanvasRef.current : captureFrame();
       if (!source) return;
-      if (trackBothFaces) {
-        const faces = await detectFaces(source);
-        const combined = encompassFaces(faces, videoAR);
-        if (combined) crop.setCrop({ cx: combined.cx, cy: combined.cy, radius: combined.radius });
-      } else {
-        const face = await detectFace(source);
-        if (face) crop.setCrop({ cx: face.cx, cy: face.cy, radius: face.radius });
-      }
+      const faces = await detectFaces(source, faceCircleScale);
+      setDetectedFaces(faces);
+      if (faces.length === 0) return;
+      const combined = encompassFaces(faces, videoAR);
+      if (combined) crop.setCrop({ cx: combined.cx, cy: combined.cy, radius: combined.radius });
     } finally {
       setDetectingFace(false);
     }
@@ -160,6 +161,8 @@ export default function WebcamView({
   videoARRef.current = videoAR;
   const trackBothRef = useRef(trackBothFaces);
   trackBothRef.current = trackBothFaces;
+  const faceCircleScaleRef = useRef(faceCircleScale);
+  faceCircleScaleRef.current = faceCircleScale;
 
   // Auto face tracking loop — runs alongside the live frame loop
   useEffect(() => {
@@ -173,14 +176,13 @@ export default function WebcamView({
         try {
           const frame = captureFrame();
           if (frame) {
-            const both = trackBothRef.current;
-            const faces = await detectFaces(frame);
+            const faces = await detectFaces(frame, faceCircleScaleRef.current);
+            if (running) setDetectedFaces(faces);
             let target: { cx: number; cy: number; radius: number } | null = null;
 
-            if (both && faces.length > 1) {
+            if (faces.length > 1) {
               target = encompassFaces(faces, videoARRef.current || 1);
             } else if (faces.length > 0) {
-              // Pick the largest face
               target = faces[0];
             }
 
@@ -216,6 +218,7 @@ export default function WebcamView({
   const handleCropPointerDown = useCallback(
     (e: ReactPointerEvent, action: 'move' | 'resize', contentW: number, contentH: number) => {
       setFaceTrackMode('off');
+      setDetectedFaces([]);
       crop.onPointerDown(e, action, contentW, contentH);
     },
     [crop]
@@ -224,6 +227,7 @@ export default function WebcamView({
   const handleCropWheel = useCallback(
     (deltaY: number, contentW: number, contentH: number) => {
       setFaceTrackMode('off');
+      setDetectedFaces([]);
       crop.onWheel(deltaY, contentW, contentH);
     },
     [crop]
@@ -312,6 +316,7 @@ export default function WebcamView({
           onPointerMove={crop.onPointerMove}
           onPointerUp={crop.onPointerUp}
           onWheel={handleCropWheel}
+          faces={detectedFaces}
         />
 
         {error && (
@@ -349,11 +354,9 @@ export default function WebcamView({
         <button className="btn btn--sm" onClick={crop.resetCrop} title="Reset crop circle position and size">
           ⊙ Reset Crop
         </button>
-        {frozen && (
-          <button className="btn btn--sm" onClick={handleDetectFace} disabled={detectingFace || !frozen} title="Detect face and center crop circle (F)">
-            {detectingFace ? '⏳' : '👤'}
-          </button>
-        )}
+        <button className="btn btn--sm" onClick={handleDetectFace} disabled={detectingFace || !active} title="Detect faces and fit crop circle (F)">
+          {detectingFace ? '⏳' : '👤'} Detect
+        </button>
         {!frozen && (
           <>
             <button

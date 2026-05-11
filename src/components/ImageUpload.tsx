@@ -1,6 +1,7 @@
 import { useRef, useState, useCallback, useEffect, type DragEvent } from 'react';
 import { useCircleCrop } from '../hooks/useCircleCrop';
 import CircleCropOverlay from './CircleCropOverlay';
+import { detectFaces, encompassFaces, type FaceBounds } from '../processing/faceDetection';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -11,13 +12,16 @@ interface Props {
   onClear: () => void;
   crop: ReturnType<typeof useCircleCrop>;
   backgroundRemoval: boolean;
+  faceCircleScale: number;
 }
 
-export default function ImageUpload({ onImageReady, onImageReadyWithBg, onCropChange, onClear, crop, backgroundRemoval }: Props) {
+export default function ImageUpload({ onImageReady, onImageReadyWithBg, onCropChange, onClear, crop, backgroundRemoval, faceCircleScale }: Props) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const imageUrlRef = useRef<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [detectedFaces, setDetectedFaces] = useState<FaceBounds[]>([]);
+  const [detectingFace, setDetectingFace] = useState(false);
   const [urlInput, setUrlInput] = useState('');
   const imgRef = useRef<HTMLImageElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -156,6 +160,21 @@ export default function ImageUpload({ onImageReady, onImageReadyWithBg, onCropCh
     }
   };
 
+  const handleDetectFace = async () => {
+    const img = loadedImgRef.current;
+    if (!img || !img.complete || img.naturalWidth === 0 || detectingFace) return;
+    setDetectingFace(true);
+    try {
+      const faces = await detectFaces(img, faceCircleScale);
+      setDetectedFaces(faces);
+      if (faces.length === 0) return;
+      const combined = encompassFaces(faces, imageAR);
+      if (combined) crop.setCrop({ cx: combined.cx, cy: combined.cy, radius: combined.radius });
+    } finally {
+      setDetectingFace(false);
+    }
+  };
+
   // Re-extract when crop changes (debounced). Calls recrop() which
   // re-extracts the circle from the cached BG-removed full image (or original)
   // without re-running BG removal.
@@ -199,6 +218,7 @@ export default function ImageUpload({ onImageReady, onImageReadyWithBg, onCropCh
               onPointerMove={crop.onPointerMove}
               onPointerUp={crop.onPointerUp}
               onWheel={crop.onWheel}
+              faces={detectedFaces}
             />
           </>
         ) : (
@@ -244,6 +264,9 @@ export default function ImageUpload({ onImageReady, onImageReadyWithBg, onCropCh
             </button>
             <button className="btn btn--sm" onClick={crop.resetCrop} title="Reset crop circle">
               ⊙
+            </button>
+            <button className="btn btn--sm" onClick={handleDetectFace} disabled={detectingFace} title="Detect faces and fit crop circle">
+              {detectingFace ? '⏳' : '👤'}
             </button>
             <button
               className="btn btn--sm"

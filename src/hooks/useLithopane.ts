@@ -3,7 +3,6 @@ import * as THREE from 'three';
 import { processImage } from '../processing/imageProcessor';
 import { vectorizeImage, type VectorizationParams } from '../processing/vectorize';
 import { removeBackgroundOptimized } from '../processing/backgroundRemoval';
-import { createTextMask, applyTextMask } from '../processing/engravingStamp';
 import { generateLithopaneMesh, type LithopaneGeometry } from '../three/LithopaneMesh';
 import type { LithopaneConfig, ProcessingState } from '../types';
 import { roundToPrecision } from '../utils/mathUtils';
@@ -39,7 +38,7 @@ export function useLithopane(
 
   /** Run processImage with all current config params. */
   const runProcessing = useCallback(
-    (source: HTMLCanvasElement | HTMLImageElement, textMask?: Uint8Array | null) => {
+    (source: HTMLCanvasElement | HTMLImageElement) => {
       const effectiveBase = config.baseLayerHeightMm > 0 ? config.baseLayerHeightMm : config.layerHeightMm;
       return processImage(
         source,
@@ -69,7 +68,6 @@ export function useLithopane(
         config.pathBridging,
         config.pathSmoothing,
         config.edgeDilation,
-        textMask,
         config.renderResolution
       );
     },
@@ -103,8 +101,7 @@ export function useLithopane(
   const buildMeshRef = useRef(buildMesh);
   buildMeshRef.current = buildMesh;
 
-  /** Run processing with engraving: create text mask first so dithering
-   *  skips text pixels, then stamp letter heights after quantisation.
+  /** Run processing pipeline: either vector or standard dithering path.
    *  When vectorizeEnabled is true, uses the vector pipeline instead. */
   const runWithEngraving = useCallback(
     (source: HTMLCanvasElement | HTMLImageElement) => {
@@ -145,22 +142,7 @@ export function useLithopane(
       }
 
       // Standard dithering path
-      // Phase 1: build text mask (if engraving enabled) BEFORE dithering
-      let textMask: Uint8Array | null = null;
-      if (cfg.engravingEnabled && cfg.engravingText) {
-        // We need the resolution that processImage will produce.
-        // Compute it the same way downsampleToCanvas does: min(ceil(diameter / nozzle), 500).
-        const res = Math.min(Math.ceil(cfg.diameterMm / cfg.nozzleWidthMm), 500);
-        textMask = createTextMask(res, cfg.diameterMm, cfg.engravingText, cfg.engravingFontSize, cfg.engravingAngle);
-      }
-      // Phase 2: process image — dithering skips text pixels
-      const result = runProcessingRef.current(source, textMask);
-      // Phase 3: stamp letter heights on the already-dithered heightmap
-      if (textMask) {
-        const effectiveBase = cfg.baseLayerHeightMm > 0 ? cfg.baseLayerHeightMm : cfg.layerHeightMm;
-        applyTextMask(result.heightmap, textMask, cfg.numLayers, cfg.layerHeightMm, effectiveBase);
-      }
-      return result;
+      return runProcessingRef.current(source);
     },
     []
   );
@@ -481,5 +463,5 @@ export function useLithopane(
     geometryRef.current?.notches?.dispose();
   }, []);
 
-  return { geometry, processing, maxThickness, generate, generateLive, regenerate, regenerateWithBg, regenerateWithoutBg, hasCachedSource, hasOriginalSource, heightmapData, computedThresholds, recrop, reset };
+  return { geometry, processing, maxThickness, generate, generateLive, regenerate, regenerateWithBg, regenerateWithoutBg, hasCachedSource, hasOriginalSource, heightmapData, computedThresholds, recrop, reset, cachedSource: cachedSourceRef };
 }

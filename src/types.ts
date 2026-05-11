@@ -13,6 +13,7 @@ export interface LithopaneConfig {
   backgroundRemoval: boolean;
   autoRemoveBgOnFreeze: boolean; // auto-run BG removal when freezing webcam frame
   trackBothFaces: boolean;         // when tracking, fit crop around both faces instead of just the largest
+  faceCircleScale: number;         // 0.8 to 3.0, multiplier for face-to-circle size (1.3 = default)
   bgModel: 'u2netp' | 'u2net' | 'isnet_general_use' | 'isnet_anime' | 'silueta' | 'u2net_human_seg';
   continuousMode: boolean;
   brightness: number; // -1 to 1, default 0
@@ -38,11 +39,6 @@ export interface LithopaneConfig {
   pathSmoothing: number;           // 0 to 4, boundary smoothing iterations (0 = off)
   edgeDilation: number;            // 0 to 2, dilate thin edges by this many nozzle widths
   showHeightmap: boolean;          // show 2D heightmap/heatmap preview instead of 3D
-  engravingEnabled: boolean;       // enable text engraving around the rim
-  engravingText: string;           // text to engrave around the rim
-  engravingFontSize: number;       // font size in mm for rim engraving
-  engravingAngle: number;          // starting angle in degrees for text placement
-  engravingLayers: number;         // number of extra layers for the engraving band (1-3)
   renderResolution: number;        // 1 to 4, output resolution multiplier for non-vector mode
   // Vectorization mode
   vectorizeEnabled: boolean;       // use vector-based edge tracing instead of dithering
@@ -65,6 +61,7 @@ export const DEFAULT_CONFIG: LithopaneConfig = {
   backgroundRemoval: false,
   autoRemoveBgOnFreeze: true,
   trackBothFaces: false,
+  faceCircleScale: 1.3,
   bgModel: 'u2net_human_seg',
   continuousMode: true,
   brightness: 0,
@@ -90,11 +87,6 @@ export const DEFAULT_CONFIG: LithopaneConfig = {
   pathSmoothing: 2,
   edgeDilation: 0.5,
   showHeightmap: false,
-  engravingEnabled: false,
-  engravingText: '',
-  engravingFontSize: 3,
-  engravingAngle: 0,
-  engravingLayers: 1,
   renderResolution: 1,
   vectorizeEnabled: false,
   vectorSmoothing: 2,

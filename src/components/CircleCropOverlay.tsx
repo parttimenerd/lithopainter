@@ -1,5 +1,6 @@
 import { type PointerEvent as ReactPointerEvent, useRef, useState, useEffect, useLayoutEffect, useMemo } from 'react';
 import type { CropCircle } from '../types';
+import type { FaceBounds } from '../processing/faceDetection';
 
 interface Props {
   crop: CropCircle;
@@ -8,6 +9,7 @@ interface Props {
   onPointerMove: (e: ReactPointerEvent, contentW: number, contentH: number) => void;
   onPointerUp: () => void;
   onWheel?: (deltaY: number, contentW: number, contentH: number) => void;
+  faces?: FaceBounds[];
 }
 
 /** Compute the visible content area within the container for object-fit: contain */
@@ -29,7 +31,7 @@ function computeContainFit(containerW: number, containerH: number, sourceAR: num
   };
 }
 
-export default function CircleCropOverlay({ crop, sourceAspectRatio, onPointerDown, onPointerMove, onPointerUp, onWheel }: Props) {
+export default function CircleCropOverlay({ crop, sourceAspectRatio, onPointerDown, onPointerMove, onPointerUp, onWheel, faces }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 100, h: 100 });
   const maskId = useMemo(() => `crop-mask-${Math.random().toString(36).slice(2, 9)}`, []);
@@ -132,6 +134,26 @@ export default function CircleCropOverlay({ crop, sourceAspectRatio, onPointerDo
           className="circle-overlay__resize"
           onPointerDown={(e) => onPointerDown(e, 'resize', fit.displayW, fit.displayH)}
         />
+
+        {/* Face indicator circles */}
+        {faces && faces.map((face, i) => {
+          const fCxPx = fit.offsetX + face.cx * fit.displayW;
+          const fCyPx = fit.offsetY + face.cy * fit.displayH;
+          const fRPx = face.radius * minDim;
+          return (
+            <circle
+              key={i}
+              cx={fCxPx}
+              cy={fCyPx}
+              r={fRPx}
+              fill="transparent"
+              stroke="rgba(100,200,255,0.7)"
+              strokeWidth="1.5"
+              strokeDasharray="4 2"
+              style={{ pointerEvents: 'none' }}
+            />
+          );
+        })}
       </svg>
     </div>
   );

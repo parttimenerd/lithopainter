@@ -111,6 +111,9 @@ export default function PreviewPanel({
         >
           ⬇ Export STL
         </button>
+        <a className="btn btn--sm" href="/Keyfob_lithopane.3mf" download>
+          ⬇ 35mm Keyfob (.3mf)
+        </a>
         <button
           className="btn btn--sm"
           onClick={() => setShowShortcuts(!showShortcuts)}

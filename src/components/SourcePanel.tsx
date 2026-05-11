@@ -68,6 +68,7 @@ export default function SourcePanel({
             backgroundRemoval={config.backgroundRemoval}
             autoRemoveBgOnFreeze={config.autoRemoveBgOnFreeze}
             trackBothFaces={config.trackBothFaces}
+            faceCircleScale={config.faceCircleScale}
           />
         ) : (
           <ImageUpload
@@ -77,6 +78,7 @@ export default function SourcePanel({
             onClear={onClear}
             crop={crop}
             backgroundRemoval={config.backgroundRemoval}
+            faceCircleScale={config.faceCircleScale}
           />
         )}
       </div>
