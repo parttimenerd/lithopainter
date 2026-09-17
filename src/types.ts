@@ -16,6 +16,7 @@ export interface LithopaneConfig {
   faceCircleScale: number;         // 0.8 to 3.0, multiplier for face-to-circle size (1.3 = default)
   bgModel: 'u2netp' | 'u2net' | 'isnet_general_use' | 'isnet_anime' | 'silueta' | 'u2net_human_seg';
   continuousMode: boolean;
+  continuousBgRemoval: boolean; // run BG removal on every live webcam frame (always uses u2netp)
   brightness: number; // -1 to 1, default 0
   contrast: number;   // -1 to 1, default 0
   edgeEnhance: number; // 0 to 10, default 0 (0 = off)
@@ -46,6 +47,12 @@ export interface LithopaneConfig {
   vectorMinFeature: number;        // 0.5 to 5, minimum feature size in nozzle widths
   vectorResolution: number;        // 1 to 8, output resolution multiplier
   vectorFillRegions: boolean;      // fill enclosed areas as solid polygons (vs stroke edges only)
+  // GCode generation options (A1 mini)
+  gcodeWipeNozzle: boolean;        // include nozzle wipe sequence in start GCode
+  gcodePrimeLine: boolean;         // include prime line in start GCode
+  gcodeStandbyTemp: boolean;       // keep nozzle at 100°C standby in end GCode (vs full cool)
+  gcodeStandbyTempValue: number;   // standby temperature in °C
+  gcodeSkipBedLeveling: boolean;   // skip G29.2 (assume bed already levelled)
 }
 
 export const DEFAULT_CONFIG: LithopaneConfig = {
@@ -55,15 +62,16 @@ export const DEFAULT_CONFIG: LithopaneConfig = {
   baseLayerHeightMm: 0,
   numLayers: 4,
   nozzleWidthMm: 0.4,
-  numNotches: 10,
-  notchRadiusMm: 2,
-  notchHeightMm: 3,
+  numNotches: 7,
+  notchRadiusMm: 0.5,
+  notchHeightMm: 0.5,
   backgroundRemoval: false,
   autoRemoveBgOnFreeze: true,
   trackBothFaces: false,
   faceCircleScale: 1.3,
   bgModel: 'u2net_human_seg',
   continuousMode: true,
+  continuousBgRemoval: false,
   brightness: 0,
   contrast: 0,
   edgeEnhance: 0,
@@ -81,11 +89,11 @@ export const DEFAULT_CONFIG: LithopaneConfig = {
   reserveLayerForBg: true,
   lightIntensity: 1.0,
   absorptionCoefficient: 8.0,
-  arachneOptimize: false,
+  arachneOptimize: true,
   pathMinIsland: 1.5,
   pathBridging: 1.0,
   pathSmoothing: 2,
-  edgeDilation: 0.5,
+  edgeDilation: 0,
   showHeightmap: false,
   renderResolution: 1,
   vectorizeEnabled: false,
@@ -93,6 +101,11 @@ export const DEFAULT_CONFIG: LithopaneConfig = {
   vectorMinFeature: 1.5,
   vectorResolution: 4,
   vectorFillRegions: true,
+  gcodeWipeNozzle: true,
+  gcodePrimeLine: true,
+  gcodeStandbyTemp: true,
+  gcodeStandbyTempValue: 100,
+  gcodeSkipBedLeveling: true,
 };
 
 export interface CropCircle {

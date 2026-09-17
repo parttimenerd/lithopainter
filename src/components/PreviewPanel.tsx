@@ -17,6 +17,7 @@ interface Props {
   showHeightmap: boolean;
   heightmapData: { heightmap: Float32Array; resolution: number } | null;
   onExport: () => void;
+  arachneEnabled: boolean;
 }
 
 export default function PreviewPanel({
@@ -30,6 +31,7 @@ export default function PreviewPanel({
   showHeightmap,
   heightmapData,
   onExport,
+  arachneEnabled,
 }: Props) {
   const handleExport = () => {
     onExport();
@@ -38,6 +40,7 @@ export default function PreviewPanel({
   const [errorDismissed, setErrorDismissed] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showNotches, setShowNotches] = useState(false);
+  const [simulateArachne, setSimulateArachne] = useState(true);
 
   // Reset dismiss when a new status arrives
   useEffect(() => {
@@ -50,7 +53,7 @@ export default function PreviewPanel({
         {showHeightmap && heightmapData ? (
           <HeightmapPreview heightmap={heightmapData.heightmap} resolution={heightmapData.resolution} heatmap={true} />
         ) : (
-          <LithopaneScene lithoGeo={lithoGeo} maxThickness={maxThickness} baseLayerHeightMm={baseLayerHeightMm} layerHeightMm={layerHeightMm} lightIntensity={lightIntensity} absorptionCoefficient={absorptionCoefficient} showNotches={showNotches} />
+          <LithopaneScene lithoGeo={lithoGeo} maxThickness={maxThickness} baseLayerHeightMm={baseLayerHeightMm} layerHeightMm={layerHeightMm} lightIntensity={lightIntensity} absorptionCoefficient={absorptionCoefficient} showNotches={showNotches} simulateArachne={arachneEnabled && simulateArachne} />
         )}
       </div>
 
@@ -104,6 +107,16 @@ export default function PreviewPanel({
           />
           Notches
         </label>
+        {arachneEnabled && (
+          <label className="preview-panel__toggle">
+            <input
+              type="checkbox"
+              checked={simulateArachne}
+              onChange={(e) => setSimulateArachne(e.target.checked)}
+            />
+            Simulate layers
+          </label>
+        )}
         <button
           className="btn btn--primary"
           onClick={handleExport}

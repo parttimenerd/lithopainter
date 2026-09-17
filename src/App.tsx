@@ -315,6 +315,7 @@ export default function App() {
           showHeightmap={config.showHeightmap}
           heightmapData={heightmapData}
           onExport={handleExport}
+          arachneEnabled={config.arachneOptimize}
         />
     </div>
   );

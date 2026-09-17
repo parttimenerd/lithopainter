@@ -12,6 +12,7 @@ interface Props {
   lightIntensity: number;
   absorptionCoefficient: number;
   showNotches: boolean;
+  simulateArachne: boolean;
 }
 
 /**
@@ -21,7 +22,7 @@ interface Props {
  * absorption-based brightness, so all layer heights are visually distinct.
  * BG pixels (Z < baseLayer) render as maximally bright (thinnest plastic).
  */
-function useBacklitMaterial(maxThickness: number, baseLayerHeightMm: number, layerHeightMm: number, lightIntensity: number, absorptionCoefficient: number) {
+function useBacklitMaterial(maxThickness: number, baseLayerHeightMm: number, layerHeightMm: number, lightIntensity: number, absorptionCoefficient: number, simulateArachne: boolean) {
   const material = useMemo(() => {
     return new THREE.ShaderMaterial({
       uniforms: {
@@ -30,6 +31,7 @@ function useBacklitMaterial(maxThickness: number, baseLayerHeightMm: number, lay
         uLayerHeight: { value: layerHeightMm },
         uLightIntensity: { value: lightIntensity },
         uMu: { value: absorptionCoefficient },
+        uSimulateArachne: { value: simulateArachne ? 1.0 : 0.0 },
       },
       vertexShader: /* glsl */ `
         varying float vZ;
@@ -44,6 +46,7 @@ function useBacklitMaterial(maxThickness: number, baseLayerHeightMm: number, lay
         uniform float uLayerHeight;
         uniform float uLightIntensity;
         uniform float uMu;
+        uniform float uSimulateArachne;
         varying float vZ;
         void main() {
           // Warm white PLA base
@@ -58,15 +61,27 @@ function useBacklitMaterial(maxThickness: number, baseLayerHeightMm: number, lay
             return;
           }
 
+          float z = vZ;
+
+          // Arachne simulation: snap Z to the nearest discrete layer boundary.
+          // Arachne slices the mesh at each layer height and generates variable-
+          // width walls per slice — the printed thickness at any XY point is
+          // always a whole multiple of layerHeightMm. Snapping here shows the
+          // same stepped appearance the physical print will have.
+          if (uSimulateArachne > 0.5 && uLayerHeight > 0.0 && z > uBaseLayer) {
+            float layersAboveBase = (z - uBaseLayer) / uLayerHeight;
+            z = uBaseLayer + floor(layersAboveBase + 0.5) * uLayerHeight;
+          }
+
           float brightness;
-          if (vZ <= 0.001) {
+          if (z <= 0.001) {
             // Rim / bottom cap / folded exterior — opaque edge
             brightness = 0.04;
           } else {
             // Lambert-Beer absorption: thinner = brighter, thicker = darker.
             // BG-removed pixels (Z < baseLayer) are ultra-thin and render
             // as the brightest areas. No clamping — use actual Z directly.
-            brightness = exp(-uMu * vZ) * uLightIntensity;
+            brightness = exp(-uMu * z) * uLightIntensity;
             brightness = clamp(0.08 + brightness * 0.92, 0.0, 1.0);
           }
 
@@ -75,7 +90,7 @@ function useBacklitMaterial(maxThickness: number, baseLayerHeightMm: number, lay
       `,
       side: THREE.DoubleSide,
     });
-  }, [maxThickness, baseLayerHeightMm, layerHeightMm, lightIntensity, absorptionCoefficient]);
+  }, [maxThickness, baseLayerHeightMm, layerHeightMm, lightIntensity, absorptionCoefficient, simulateArachne]);
   useEffect(() => () => { material.dispose(); }, [material]);
   return material;
 }
@@ -105,9 +120,9 @@ function CameraController({ lithoGeo, maxThickness }: { lithoGeo: LithopaneGeome
   return null;
 }
 
-function LithopaneMeshView({ lithoGeo, maxThickness, baseLayerHeightMm, layerHeightMm, lightIntensity, absorptionCoefficient, showNotches }: Props) {
+function LithopaneMeshView({ lithoGeo, maxThickness, baseLayerHeightMm, layerHeightMm, lightIntensity, absorptionCoefficient, showNotches, simulateArachne }: Props) {
   const meshRef = useRef<THREE.Mesh>(null);
-  const material = useBacklitMaterial(maxThickness, baseLayerHeightMm, layerHeightMm, lightIntensity, absorptionCoefficient);
+  const material = useBacklitMaterial(maxThickness, baseLayerHeightMm, layerHeightMm, lightIntensity, absorptionCoefficient, simulateArachne);
 
   if (!lithoGeo) return null;
 
@@ -121,7 +136,7 @@ function LithopaneMeshView({ lithoGeo, maxThickness, baseLayerHeightMm, layerHei
   );
 }
 
-export default function LithopaneScene({ lithoGeo, maxThickness, baseLayerHeightMm, layerHeightMm, lightIntensity, absorptionCoefficient, showNotches }: Props) {
+export default function LithopaneScene({ lithoGeo, maxThickness, baseLayerHeightMm, layerHeightMm, lightIntensity, absorptionCoefficient, showNotches, simulateArachne }: Props) {
   // Adapt camera distance so the model is always visible, even at large diameters
   const cameraZ = Math.max(50, maxThickness * 5 + 20);
   return (
@@ -133,7 +148,7 @@ export default function LithopaneScene({ lithoGeo, maxThickness, baseLayerHeight
       <color attach="background" args={['#0a0a14']} />
       <OrbitControls makeDefault enableDamping dampingFactor={0.1} />
       <CameraController lithoGeo={lithoGeo} maxThickness={maxThickness} />
-      <LithopaneMeshView lithoGeo={lithoGeo} maxThickness={maxThickness} baseLayerHeightMm={baseLayerHeightMm} layerHeightMm={layerHeightMm} lightIntensity={lightIntensity} absorptionCoefficient={absorptionCoefficient} showNotches={showNotches} />
+      <LithopaneMeshView lithoGeo={lithoGeo} maxThickness={maxThickness} baseLayerHeightMm={baseLayerHeightMm} layerHeightMm={layerHeightMm} lightIntensity={lightIntensity} absorptionCoefficient={absorptionCoefficient} showNotches={showNotches} simulateArachne={simulateArachne} />
     </Canvas>
   );
 }

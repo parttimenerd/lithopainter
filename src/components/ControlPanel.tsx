@@ -1,8 +1,60 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import type { LithopaneConfig } from '../types';
 import { DEFAULT_CONFIG } from '../types';
+import { generateStartGCode, generateEndGCode } from '../utils/gcodeTemplates';
 
 import ThresholdEditor from './ThresholdEditor';
+
+function CopyButton({ getText }: { getText: () => string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(getText()).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, [getText]);
+  return (
+    <button className="btn btn--sm" style={{ marginLeft: 'auto' }} onClick={handleCopy}>
+      {copied ? '✓ Copied' : 'Copy'}
+    </button>
+  );
+}
+
+function GCodeArea({ label, getText }: { label: string; getText: () => string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <button
+          className="btn btn--sm"
+          onClick={() => setOpen(o => !o)}
+          style={{ flex: 1, textAlign: 'left' }}
+        >
+          {open ? '▾' : '▸'} {label}
+        </button>
+        <CopyButton getText={getText} />
+      </div>
+      {open && (
+        <pre style={{
+          marginTop: 4,
+          padding: '6px 8px',
+          background: '#1a1a1a',
+          color: '#ccc',
+          fontSize: 10,
+          lineHeight: 1.4,
+          borderRadius: 4,
+          maxHeight: 260,
+          overflowY: 'auto',
+          whiteSpace: 'pre',
+          fontFamily: 'monospace',
+          userSelect: 'text',
+        }}>
+          {getText()}
+        </pre>
+      )}
+    </div>
+  );
+}
 
 interface Props {
   config: LithopaneConfig;
@@ -73,8 +125,8 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
 
   const resetBg = () => onChange({ ...config,
     bgModel: D.bgModel, reserveLayerForBg: D.reserveLayerForBg,
-    autoRemoveBgOnFreeze: D.autoRemoveBgOnFreeze, trackBothFaces: D.trackBothFaces,
-    faceCircleScale: D.faceCircleScale,
+    autoRemoveBgOnFreeze: D.autoRemoveBgOnFreeze, continuousBgRemoval: D.continuousBgRemoval,
+    trackBothFaces: D.trackBothFaces, faceCircleScale: D.faceCircleScale,
   });
 
   const resetPrint = () => onChange({ ...config,
@@ -92,6 +144,11 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
 
   const resetExpert = () => onChange({ ...config,
     showHeightmap: D.showHeightmap,
+    gcodeWipeNozzle: D.gcodeWipeNozzle,
+    gcodePrimeLine: D.gcodePrimeLine,
+    gcodeStandbyTemp: D.gcodeStandbyTemp,
+    gcodeStandbyTempValue: D.gcodeStandbyTempValue,
+    gcodeSkipBedLeveling: D.gcodeSkipBedLeveling,
   });
 
   return (
@@ -192,6 +249,7 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
         <div className="control-section__toggles">
           <label className="toggle"><input type="checkbox" checked={config.reserveLayerForBg} onChange={(e) => set('reserveLayerForBg', e.target.checked)} /> Reserve lowest layer for BG</label>
           <label className="toggle"><input type="checkbox" checked={config.autoRemoveBgOnFreeze} onChange={(e) => set('autoRemoveBgOnFreeze', e.target.checked)} /> Auto remove BG on freeze</label>
+          <label className="toggle"><input type="checkbox" checked={config.continuousBgRemoval} onChange={(e) => set('continuousBgRemoval', e.target.checked)} /> Live BG removal (u2netp)</label>
           <label className="toggle"><input type="checkbox" checked={config.trackBothFaces} onChange={(e) => set('trackBothFaces', e.target.checked)} /> Track all faces</label>
         </div>
         <div className="control-section__grid">
@@ -238,7 +296,7 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
           </div>
         </div>
         <div className="control-section__toggles">
-          <label className="toggle"><input type="checkbox" checked={config.arachneOptimize} onChange={(e) => set('arachneOptimize', e.target.checked)} /> Optimize for Arachne</label>
+          <label className="toggle"><input type="checkbox" checked={config.arachneOptimize} onChange={(e) => set('arachneOptimize', e.target.checked)} /> Arachne heightmap post-processing</label>
         </div>
         <div className="control-section__grid">
           <div className="control-panel__group">
@@ -284,6 +342,32 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
       <Section title="Expert Options" defaultOpen={false} onReset={resetExpert}>
         <div className="control-section__toggles">
           <label className="toggle"><input type="checkbox" checked={config.showHeightmap} onChange={(e) => set('showHeightmap', e.target.checked)} /> Show Heightmap</label>
+        </div>
+        <div style={{ marginTop: 10, borderTop: '1px solid #333', paddingTop: 8 }}>
+          <div style={{ fontSize: 11, color: '#aaa', marginBottom: 6 }}>
+            A1 mini GCode — paste into BambuStudio: Printer Settings → Machine G-code.
+            Also enable Arachne wall generator, set walls to 99, infill 0%, no top/bottom shells.
+          </div>
+          <div className="control-section__toggles">
+            <label className="toggle"><input type="checkbox" checked={config.gcodeWipeNozzle} onChange={(e) => set('gcodeWipeNozzle', e.target.checked)} /> Wipe nozzle</label>
+            <label className="toggle"><input type="checkbox" checked={config.gcodePrimeLine} onChange={(e) => set('gcodePrimeLine', e.target.checked)} /> Prime line</label>
+            <label className="toggle"><input type="checkbox" checked={config.gcodeSkipBedLeveling} onChange={(e) => set('gcodeSkipBedLeveling', e.target.checked)} /> Skip bed leveling (pre-levelled)</label>
+            <label className="toggle"><input type="checkbox" checked={config.gcodeStandbyTemp} onChange={(e) => set('gcodeStandbyTemp', e.target.checked)} /> Standby temp at end</label>
+          </div>
+          {config.gcodeStandbyTemp && (
+            <div className="control-panel__group" style={{ marginTop: 4 }}>
+              <label>Standby temp: {config.gcodeStandbyTempValue}°C</label>
+              <input type="range" min={60} max={200} step={5} value={config.gcodeStandbyTempValue} onChange={(e) => set('gcodeStandbyTempValue', +e.target.value)} />
+            </div>
+          )}
+          <GCodeArea
+            label="Start GCode"
+            getText={() => generateStartGCode(config)}
+          />
+          <GCodeArea
+            label="End GCode"
+            getText={() => generateEndGCode(config)}
+          />
         </div>
       </Section>
 

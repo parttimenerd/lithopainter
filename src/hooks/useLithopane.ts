@@ -86,7 +86,6 @@ export function useLithopane(
         config.notchRadiusMm,
         config.notchHeightMm,
         config.baseLayerHeightMm,
-        config.arachneOptimize,
         config.nozzleWidthMm
       );
     },
@@ -358,10 +357,47 @@ export function useLithopane(
   }, []);
 
   /**
-   * Fast generation for live preview (no bg removal).
+   * Fast generation for live preview.
+   * When config.continuousBgRemoval is true, runs u2netp BG removal on every
+   * frame, but skips a frame if the previous inference is still in-flight so
+   * the live preview never stalls.
    */
+  const liveBgBusyRef = useRef(false);
   const generateLive = useCallback(
     (sourceCanvas: HTMLCanvasElement) => {
+      const cfg = configRef.current;
+      if (cfg.continuousBgRemoval && !liveBgBusyRef.current) {
+        liveBgBusyRef.current = true;
+        // Clone so the caller can reuse its canvas while inference runs async
+        const clone = document.createElement('canvas');
+        clone.width = sourceCanvas.width;
+        clone.height = sourceCanvas.height;
+        clone.getContext('2d')!.drawImage(sourceCanvas, 0, 0);
+        removeBackgroundOptimized(clone, () => {}, 'u2netp').then((bgRemoved) => {
+          liveBgBusyRef.current = false;
+          const ec = extractCircleRef.current;
+          const cropped = ec ? ec(bgRemoved) : bgRemoved;
+          try {
+            const { heightmap, resolution, computedThresholds: ct } = runWithEngravingRef.current(cropped);
+            setHeightmapData({ heightmap, resolution });
+            setComputedThresholds(ct);
+            const geo = buildMeshRef.current(heightmap, resolution);
+            setGeometry((prev) => {
+              prev?.body.dispose();
+              prev?.notches?.dispose();
+              return geo;
+            });
+            const cacheClone = document.createElement('canvas');
+            cacheClone.width = (cropped as HTMLCanvasElement).width;
+            cacheClone.height = (cropped as HTMLCanvasElement).height;
+            cacheClone.getContext('2d')!.drawImage(cropped, 0, 0);
+            cachedSourceRef.current = cacheClone;
+            setHasCachedSource(true);
+          } catch { /* silently skip */ }
+        }).catch(() => { liveBgBusyRef.current = false; });
+        return;
+      }
+
       try {
         const { heightmap, resolution, computedThresholds: ct } = runWithEngravingRef.current(sourceCanvas);
         setHeightmapData({ heightmap, resolution });
@@ -373,6 +409,15 @@ export function useLithopane(
           prev?.notches?.dispose();
           return geo;
         });
+
+        // Keep cache current so regenerate() re-processes the latest live frame,
+        // not a stale earlier capture, when config sliders change.
+        const clone = document.createElement('canvas');
+        clone.width = sourceCanvas.width;
+        clone.height = sourceCanvas.height;
+        clone.getContext('2d')!.drawImage(sourceCanvas, 0, 0);
+        cachedSourceRef.current = clone;
+        setHasCachedSource(true);
       } catch {
         // Silently skip frame errors in live mode
       }

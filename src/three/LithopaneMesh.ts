@@ -125,27 +125,20 @@ export function generateLithopaneMesh(
   notchRadiusMm: number,
   notchHeightMm: number,
   baseLayerHeightMm: number,
-  arachneOptimize = false,
   nozzleWidthMm = 0.4
 ): LithopaneGeometry {
   const radiusMm = diameterMm / 2;
   const baseHeight = Math.max(baseLayerHeightMm, 0.2); // lowest layer never thinner than 0.2mm
 
-  // Arachne mode: use half-nozzle vertex spacing (~0.2mm).
-  // Finer than slicer simplification threshold so contours are smooth,
-  // but not so fine that mesh generation becomes slow.
-  const defaultSpacing = diameterMm / (resolution - 1);
-  const vertexSpacingMm = arachneOptimize
-    ? Math.max(nozzleWidthMm / 2, 0.15)
-    : defaultSpacing;
-  const meshSegments = arachneOptimize
-    ? Math.ceil(diameterMm / vertexSpacingMm)
-    : resolution - 1;
+  // Vertex grid aligned to nozzle width: one vertex per toolpath centerline.
+  // Arachne reads each quad face as one wall segment, so matching vertex spacing
+  // to nozzle width gives it the cleanest possible contour input.
+  const vertexSpacingMm = nozzleWidthMm;
+  const meshSegments = Math.ceil(diameterMm / vertexSpacingMm);
 
   // Step A: Build vertex grid
   const gridSize = meshSegments + 1;
   const positions = new Float32Array(gridSize * gridSize * 3);
-  const mmPerPixel = diameterMm / resolution;
 
   for (let gy = 0; gy < gridSize; gy++) {
     for (let gx = 0; gx < gridSize; gx++) {
@@ -195,23 +188,17 @@ export function generateLithopaneMesh(
       const c = (gy + 1) * gridSize + gx;     // bottom-left
       const d = c + 1;                         // bottom-right
 
-      if (arachneOptimize) {
-        const zA = positions[a * 3 + 2];
-        const zB = positions[b * 3 + 2];
-        const zC = positions[c * 3 + 2];
-        const zD = positions[d * 3 + 2];
-        // Compare diagonals: A-D vs B-C — split along the shorter Z difference
-        // Winding: CCW when viewed from +Z (front face)
-        const diagAD = Math.abs(zA - zD);
-        const diagBC = Math.abs(zB - zC);
-        if (diagAD <= diagBC) {
-          indices.push(a, d, b, a, c, d);
-        } else {
-          indices.push(a, c, b, b, c, d);
-        }
-      } else {
-        // Default: consistent split (CCW winding)
+      const zA = positions[a * 3 + 2];
+      const zB = positions[b * 3 + 2];
+      const zC = positions[c * 3 + 2];
+      const zD = positions[d * 3 + 2];
+      // Split along the diagonal with the smaller Z difference to minimise ridges
+      const diagAD = Math.abs(zA - zD);
+      const diagBC = Math.abs(zB - zC);
+      if (diagAD <= diagBC) {
         indices.push(a, d, b, a, c, d);
+      } else {
+        indices.push(a, c, b, b, c, d);
       }
     }
   }
