@@ -20,7 +20,24 @@ function CopyButton({ getText }: { getText: () => string }) {
   );
 }
 
-function GCodeArea({ label, getText }: { label: string; getText: () => string }) {
+function DownloadButton({ getText, filename }: { getText: () => string; filename: string }) {
+  const handleDownload = useCallback(() => {
+    const blob = new Blob([getText()], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [getText, filename]);
+  return (
+    <button className="btn btn--sm" onClick={handleDownload} title="Download as file">
+      ⬇
+    </button>
+  );
+}
+
+function GCodeArea({ label, filename, getText }: { label: string; filename: string; getText: () => string }) {
   const [open, setOpen] = useState(false);
   return (
     <div style={{ marginTop: 6 }}>
@@ -33,6 +50,7 @@ function GCodeArea({ label, getText }: { label: string; getText: () => string })
           {open ? '▾' : '▸'} {label}
         </button>
         <CopyButton getText={getText} />
+        <DownloadButton getText={getText} filename={filename} />
       </div>
       {open && (
         <pre style={{
@@ -362,10 +380,12 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
           )}
           <GCodeArea
             label="Start GCode"
+            filename="A1mini_start.gcode"
             getText={() => generateStartGCode(config)}
           />
           <GCodeArea
             label="End GCode"
+            filename="A1mini_end.gcode"
             getText={() => generateEndGCode(config)}
           />
         </div>
