@@ -30,7 +30,7 @@ export function useLithopane(
   const [hasCachedSource, setHasCachedSource] = useState(false);
   const [hasOriginalSource, setHasOriginalSource] = useState(false);
 
-  const effectiveBaseLayer = config.baseLayerHeightMm > 0 ? config.baseLayerHeightMm : config.layerHeightMm;
+  const effectiveBaseLayer = Math.max(config.baseLayerHeightMm, 0.2);
   const maxThickness = roundToPrecision(
     effectiveBaseLayer + (config.numLayers - 1) * config.layerHeightMm,
     2
@@ -39,14 +39,13 @@ export function useLithopane(
   /** Run processImage with all current config params. */
   const runProcessing = useCallback(
     (source: HTMLCanvasElement | HTMLImageElement) => {
-      const effectiveBase = config.baseLayerHeightMm > 0 ? config.baseLayerHeightMm : config.layerHeightMm;
       return processImage(
         source,
         config.diameterMm,
         config.nozzleWidthMm,
         config.numLayers,
         config.layerHeightMm,
-        effectiveBase,
+        config.baseLayerHeightMm,
         config.brightness,
         config.contrast,
         config.edgeEnhance,
@@ -77,7 +76,6 @@ export function useLithopane(
   /** Build mesh from heightmap. */
   const buildMesh = useCallback(
     (heightmap: Float32Array, resolution: number) => {
-      const effectiveBase = config.baseLayerHeightMm > 0 ? config.baseLayerHeightMm : config.layerHeightMm;
       return generateLithopaneMesh(
         heightmap,
         resolution,
@@ -87,7 +85,7 @@ export function useLithopane(
         config.numNotches,
         config.notchRadiusMm,
         config.notchHeightMm,
-        effectiveBase,
+        config.baseLayerHeightMm,
         config.arachneOptimize,
         config.nozzleWidthMm
       );
@@ -109,11 +107,10 @@ export function useLithopane(
 
       // Vectorization path — bypass dithering entirely
       if (cfg.vectorizeEnabled) {
-        const effectiveBase = cfg.baseLayerHeightMm > 0 ? cfg.baseLayerHeightMm : cfg.layerHeightMm;
         const vParams: VectorizationParams = {
           numLayers: cfg.numLayers,
           layerHeightMm: cfg.layerHeightMm,
-          baseLayerHeightMm: effectiveBase,
+          baseLayerHeightMm: cfg.baseLayerHeightMm,
           diameterMm: cfg.diameterMm,
           nozzleWidthMm: cfg.nozzleWidthMm,
           smoothing: cfg.vectorSmoothing,

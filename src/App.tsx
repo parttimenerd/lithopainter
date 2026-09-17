@@ -307,7 +307,7 @@ export default function App() {
         <PreviewPanel
           lithoGeo={lithoGeo}
           maxThickness={maxThickness}
-          baseLayerHeightMm={config.baseLayerHeightMm > 0 ? config.baseLayerHeightMm : config.layerHeightMm}
+          baseLayerHeightMm={config.baseLayerHeightMm}
           layerHeightMm={config.layerHeightMm}
           lightIntensity={config.lightIntensity}
           absorptionCoefficient={config.absorptionCoefficient}

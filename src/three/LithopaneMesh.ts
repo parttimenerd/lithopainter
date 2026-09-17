@@ -129,7 +129,7 @@ export function generateLithopaneMesh(
   nozzleWidthMm = 0.4
 ): LithopaneGeometry {
   const radiusMm = diameterMm / 2;
-  const baseHeight = baseLayerHeightMm; // minimum height for interior points
+  const baseHeight = Math.max(baseLayerHeightMm, 0.2); // lowest layer never thinner than 0.2mm
 
   // Arachne mode: use half-nozzle vertex spacing (~0.2mm).
   // Finer than slicer simplification threshold so contours are smooth,
@@ -220,23 +220,48 @@ export function generateLithopaneMesh(
   plane.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   plane.setIndex(indices);
 
-  // Step C: Bottom cap — CircleGeometry at Z=0, facing -Z
-  const capSegments = Math.min(Math.max(64, meshSegments), 128);
-  const bottomCap = new THREE.CircleGeometry(radiusMm, capSegments);
-  // Flip normals to face downward
-  const bottomPos = bottomCap.attributes.position as THREE.BufferAttribute;
-  for (let i = 0; i < bottomPos.count; i++) {
-    bottomPos.setZ(i, 0);
+  // Step C: Bottom cap — built from the actual rim vertices in the plane so the
+  // perimeter is shared exactly. CircleGeometry generates its own evenly-spaced
+  // perimeter points that don't align with the grid-snapped rim vertices, leaving
+  // open edges that slicers interpret as a missing strip at the base layer.
+  const rimVerts: { x: number; y: number; angle: number; vi: number }[] = [];
+  for (let gy = 0; gy < gridSize; gy++) {
+    for (let gx = 0; gx < gridSize; gx++) {
+      const vi = gy * gridSize + gx;
+      const x = positions[vi * 3];
+      const y = positions[vi * 3 + 1];
+      const z = positions[vi * 3 + 2];
+      const r = Math.sqrt(x * x + y * y);
+      // A rim vertex: snapped to the circle boundary (z == 0, r ≈ radiusMm)
+      if (z === 0 && Math.abs(r - radiusMm) < 0.001) {
+        rimVerts.push({ x, y, angle: Math.atan2(y, x), vi });
+      }
+    }
   }
-  // Flip faces by reversing the index order
-  const bottomIndex = bottomCap.index!;
-  const idxArray = bottomIndex.array as Uint16Array | Uint32Array;
-  for (let i = 0; i < idxArray.length; i += 3) {
-    const tmp = idxArray[i];
-    idxArray[i] = idxArray[i + 2];
-    idxArray[i + 2] = tmp;
+  // Sort by angle so we get a consistent winding order
+  rimVerts.sort((a, b) => a.angle - b.angle);
+
+  // Build a fan cap: center vertex + rim vertices, facing -Z (CW winding when
+  // viewed from +Z == CCW when viewed from -Z)
+  const capVertCount = rimVerts.length + 1;
+  const capPositions = new Float32Array(capVertCount * 3);
+  // Center at index 0
+  capPositions[0] = 0; capPositions[1] = 0; capPositions[2] = 0;
+  for (let i = 0; i < rimVerts.length; i++) {
+    capPositions[(i + 1) * 3] = rimVerts[i].x;
+    capPositions[(i + 1) * 3 + 1] = rimVerts[i].y;
+    capPositions[(i + 1) * 3 + 2] = 0;
   }
-  bottomIndex.needsUpdate = true;
+  const capIndices: number[] = [];
+  for (let i = 0; i < rimVerts.length; i++) {
+    const curr = i + 1;
+    const next = (i + 1) % rimVerts.length + 1;
+    // CW order (from above) = downward-facing normal
+    capIndices.push(0, next, curr);
+  }
+  const bottomCap = new THREE.BufferGeometry();
+  bottomCap.setAttribute('position', new THREE.BufferAttribute(capPositions, 3));
+  bottomCap.setIndex(capIndices);
 
   // Step D: Manifold fusion
   // Strip UVs and normals from all geometries before merging to avoid attribute mismatch
@@ -355,7 +380,7 @@ export function generateVectorLithopaneMesh(
   resolution: number
 ): LithopaneGeometry {
   const radiusMm = diameterMm / 2;
-  const baseHeight = baseLayerHeightMm;
+  const baseHeight = Math.max(baseLayerHeightMm, 0.2); // lowest layer never thinner than 0.2mm
   const geometries: THREE.BufferGeometry[] = [];
 
   // Sort layers from lowest to highest
@@ -560,10 +585,8 @@ function buildWallStrip(
   const n = points.length;
   if (n < 3) return null;
 
-  // 2 triangles per segment, 3 vertices per triangle
-  const positions = new Float32Array(n * 6 * 3); // n segments × 2 tris × 3 verts × 3 coords
   const indices: number[] = [];
-  const verts = new Float32Array((n + 1) * 2 * 3); // (n+1) unique positions × 2 heights
+  const verts = new Float32Array((n + 1) * 2 * 3);
 
   // Build vertex array: bottom ring then top ring
   for (let i = 0; i <= n; i++) {

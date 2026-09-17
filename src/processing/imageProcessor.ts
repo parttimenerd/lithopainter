@@ -1544,6 +1544,7 @@ export function processImage(
   edgeDilation = 0.5,
   renderResolution = 1
 ): { heightmap: Float32Array; resolution: number; computedThresholds?: number[] } {
+  baseLayerHeightMm = Math.max(baseLayerHeightMm, 0.2); // lowest layer never thinner than 0.2mm
   // Mirror the source canvas if requested (horizontal flip for face-down printing)
   const actualSource = mirror ? mirrorCanvas(source) : source;
 

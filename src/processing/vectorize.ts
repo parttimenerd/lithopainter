@@ -538,7 +538,7 @@ export function vectorizeImage(
   const {
     numLayers,
     layerHeightMm,
-    baseLayerHeightMm,
+    baseLayerHeightMm: rawBaseLayerHeightMm,
     diameterMm,
     nozzleWidthMm,
     smoothing,
@@ -549,6 +549,7 @@ export function vectorizeImage(
     edgeFeather,
     mirror,
   } = params;
+  const baseLayerHeightMm = Math.max(rawBaseLayerHeightMm, 0.2); // lowest layer never thinner than 0.2mm
 
   // Step 1: Get grayscale at reasonable resolution for edge detection
   // 2× nozzle resolution for clean edges, cap at 500 for speed
