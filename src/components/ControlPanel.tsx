@@ -1,18 +1,18 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import type { LithopaneConfig } from '../types';
 import { DEFAULT_CONFIG } from '../types';
 import { generateStartGCode, generateEndGCode } from '../utils/gcodeTemplates';
 
 import ThresholdEditor from './ThresholdEditor';
 
-function CopyButton({ getText }: { getText: () => string }) {
+function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(getText()).then(() => {
+    navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
-  }, [getText]);
+  }, [text]);
   return (
     <button className="btn btn--sm" style={{ marginLeft: 'auto' }} onClick={handleCopy}>
       {copied ? '✓ Copied' : 'Copy'}
@@ -20,16 +20,16 @@ function CopyButton({ getText }: { getText: () => string }) {
   );
 }
 
-function DownloadButton({ getText, filename }: { getText: () => string; filename: string }) {
+function DownloadButton({ text, filename }: { text: string; filename: string }) {
   const handleDownload = useCallback(() => {
-    const blob = new Blob([getText()], { type: 'text/plain' });
+    const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
-  }, [getText, filename]);
+  }, [text, filename]);
   return (
     <button className="btn btn--sm" onClick={handleDownload} title="Download as file">
       ⬇
@@ -37,7 +37,7 @@ function DownloadButton({ getText, filename }: { getText: () => string; filename
   );
 }
 
-function GCodeArea({ label, filename, getText }: { label: string; filename: string; getText: () => string }) {
+function GCodeArea({ label, filename, text }: { label: string; filename: string; text: string }) {
   const [open, setOpen] = useState(false);
   return (
     <div style={{ marginTop: 6 }}>
@@ -49,8 +49,8 @@ function GCodeArea({ label, filename, getText }: { label: string; filename: stri
         >
           {open ? '▾' : '▸'} {label}
         </button>
-        <CopyButton getText={getText} />
-        <DownloadButton getText={getText} filename={filename} />
+        <CopyButton text={text} />
+        <DownloadButton text={text} filename={filename} />
       </div>
       {open && (
         <pre style={{
@@ -67,7 +67,7 @@ function GCodeArea({ label, filename, getText }: { label: string; filename: stri
           fontFamily: 'monospace',
           userSelect: 'text',
         }}>
-          {getText()}
+          {text}
         </pre>
       )}
     </div>
@@ -381,12 +381,12 @@ export default function ControlPanel({ config, onChange, computedThresholds }: P
           <GCodeArea
             label="Start GCode"
             filename="A1mini_start.gcode"
-            getText={() => generateStartGCode(config)}
+            text={useMemo(() => generateStartGCode(config), [config.gcodeWipeNozzle, config.gcodePrimeLine, config.gcodeSkipBedLeveling])}
           />
           <GCodeArea
             label="End GCode"
             filename="A1mini_end.gcode"
-            getText={() => generateEndGCode(config)}
+            text={useMemo(() => generateEndGCode(config), [config.gcodeStandbyTemp, config.gcodeStandbyTempValue])}
           />
         </div>
       </Section>
